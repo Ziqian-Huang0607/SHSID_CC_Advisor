@@ -4,8 +4,9 @@
 // - Parses the Common Course DSL and loads JSON, using CourseModel. 
 
 import type { CourseModel } from './CourseModel'; // Added 'type'
+import { CatalogLinter } from './Linter';
 
-export class Updater { // <--- ADDED 'export' HERE
+export class Updater { 
     private static readonly fileName = "Courses";
     private static readonly fileExt = "catalog";
     private static readonly baseURL = "https://edgeone.gh-proxy.org/https://raw.githubusercontent.com/WillUHD/CourseResources/refs/heads/main/";
@@ -26,6 +27,10 @@ export class Updater { // <--- ADDED 'export' HERE
             const parsedRemote = this.parseRawData(remoteRaw);
 
             if (parsedRemote) {
+                const lintIssues = CatalogLinter.run(parsedRemote);
+                if (lintIssues.length > 0) {
+                    console.warn("Updater: Catalog linter found issues:", lintIssues);
+                }
                 console.log("Updater: Successfully loaded version ", parsedRemote.version);
                 return parsedRemote;
             }
