@@ -31,13 +31,23 @@ export class CatalogSolver {
     }
 
     private buildFlattenedMap() {
-        // Flatten biology
-        for (const grade of Object.keys(this.catalog.departments.biology || {})) {
-            for (const course of this.catalog.departments.biology[grade]) {
-                this.courseMap.set(course.id, course);
+        // Loop through ALL departments safely
+        for (const [deptName, gradeMap] of Object.entries(this.catalog.departments || {})) {
+            if (deptName === 'residuals') continue;
+            
+            const typedMap = gradeMap as Record<string, CourseNode[]>;
+            if (!typedMap) continue;
+
+            for (const grade of Object.keys(typedMap)) {
+                const courses = typedMap[grade];
+                if (courses) { // FIX: Protects against undefined arrays
+                    for (const course of courses) {
+                        this.courseMap.set(course.id, course);
+                    }
+                }
             }
         }
-        // Flatten residuals
+        // Flatten residuals safely
         for (const course of this.catalog.departments.residuals || []) {
             this.courseMap.set(course.id, course);
         }

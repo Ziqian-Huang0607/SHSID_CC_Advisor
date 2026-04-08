@@ -7,8 +7,8 @@
 // the view state to the UI and the UI can call the backend via exclusively
 // the controller
 
-import { CourseSelectionController, CourseViewModel } from "./Controller";
-import { CourseModel } from "./CourseModel";
+import { CourseSelectionController, type CourseViewModel } from "./Controller";
+import type { CourseModel } from "./CourseModel";
 
 // --- MOCK CATALOG (Backend Data) ---
 const mockCatalog: CourseModel = {

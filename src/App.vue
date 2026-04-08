@@ -291,9 +291,15 @@ const allCourses = computed(() => {
   
   for (const [dept, gradesObj] of Object.entries(catalogData.value.departments)) {
     if (dept === 'residuals') continue; 
-    for (const [gradeLevel, courseArray] of Object.entries(gradesObj)) {
-      for (const course of courseArray) {
-        list.push({ id: course.id, dept, grade: gradeLevel, raw: course });
+    
+    // FIX: Tell TypeScript exactly what shape this object is
+    const typedGradesObj = gradesObj as Record<string, CourseNode[]>;
+    
+    for (const [gradeLevel, courseArray] of Object.entries(typedGradesObj)) {
+      if (courseArray) {
+        for (const course of courseArray) {
+          list.push({ id: course.id, dept, grade: gradeLevel, raw: course });
+        }
       }
     }
   }
