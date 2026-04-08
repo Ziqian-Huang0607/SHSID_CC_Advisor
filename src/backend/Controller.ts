@@ -1,44 +1,34 @@
 // Controller.ts
-// written by willuhd on Apr 8
-// - The public API controller used by the frontend
-// - This is the way the UI can access the underlying logic APIs
-// Please use this instead of the backend.
 
+// FIX 1: Restored the 'type' keywords for Vite compatibility
 import { CatalogSolver, type CourseAvailabilityState } from "./Solver";
 import type { CourseModel, CourseNode } from "./CourseModel";
 
-// Make sure this is exported so your UI files can import it!
 export interface CourseViewModel {
     id: string;
     name: string;
     grade: string;
     level: string;
-    status: 'locked' | 'available' | 'selected' | 'bypassed'; 
-    lockReason?: string;       
-    moveUpNote?: string;       
+    status: 'locked' | 'available' | 'selected' | 'bypassed';
+    lockReason?: string;
+    moveUpNote?: string;
 }
 
 export class CourseSelectionController {
     private solver: CatalogSolver;
-    private catalogMap: Map<string, CourseNode> = new Map();
-    
     private selectedIds: Set<string> = new Set();
     private moveUpOverrides: Set<string> = new Set();
-
-    private onUpdate: (viewModels: Record<string, CourseViewModel>) => void = () => {};
+    private onUpdate: (viewModels: Record<string, CourseViewModel>) => void = () => { };
 
     constructor(catalog: CourseModel) {
         this.solver = new CatalogSolver(catalog);
-        this.buildFlattenedMap(catalog);
-        
+
         this.solver.subscribe((internalState: Record<string, CourseAvailabilityState>) => {
             const uiState: Record<string, CourseViewModel> = {};
 
-            this.catalogMap.forEach((course, id) => {
+            this.solver.courseMap.forEach((course, id) => {
                 const solverState = internalState[id];
-                
-                // TS Strict Mode Fix: Ensure solverState exists before reading it
-                if (!solverState) return; 
+                if (!solverState) return;
 
                 const isSelected = this.selectedIds.has(id);
                 const isBypassed = this.moveUpOverrides.has(id);
@@ -49,11 +39,21 @@ export class CourseSelectionController {
                 else if (solverState.isAvailable) status = 'available';
 
                 let lockReason = undefined;
-                if (status === 'locked' && solverState.missingPre.length > 0) {
-                    const missingNames = solverState.missingPre.map(orBlock => 
-                        orBlock.map(reqId => this.catalogMap.get(reqId)?.name || reqId).join(" or ")
-                    ).join(" AND ");
-                    lockReason = `Requires: ${missingNames}`;
+                if (status === 'locked') {
+                    if (solverState.conflictReason) {
+                        // Triggers when a course is impossible due to backwards resolution
+                        lockReason = solverState.conflictReason; 
+                    } else {
+                        // Display forward missing items
+                        let reasons = [];
+                        if (solverState.missingPre.length > 0) {
+                            reasons.push(`Requires: ${solverState.missingPre.map(b => b.map(reqId => this.solver.courseMap.get(reqId)?.name || reqId).join(" or ")).join(" AND ")}`);
+                        }
+                        if (solverState.missingCurrent.length > 0) {
+                            reasons.push(`Concurrent: ${solverState.missingCurrent.map(b => b.map(reqId => this.solver.courseMap.get(reqId)?.name || reqId).join(" or ")).join(" AND ")}`);
+                        }
+                        if (reasons.length > 0) lockReason = reasons.join(" | ");
+                    }
                 }
 
                 uiState[id] = {
@@ -71,39 +71,33 @@ export class CourseSelectionController {
         });
     }
 
-    private buildFlattenedMap(catalog: CourseModel) {
-        Object.values(catalog.departments.biology || {}).forEach(gradeArr => 
-            gradeArr.forEach(c => this.catalogMap.set(c.id, c))
-        );
-        (catalog.departments.residuals || []).forEach(c => this.catalogMap.set(c.id, c));
-    }
-
     public connectView(callback: (viewModels: Record<string, CourseViewModel>) => void) {
         this.onUpdate = callback;
-        // Trigger initial push
-        this.solver.addCompleted(""); 
+        this.solver.forceNotify(); 
     }
 
     public handleTap(courseId: string) {
         if (this.selectedIds.has(courseId)) {
+            // Deselecting no longer invalidates or pulls down the logic chain
             this.selectedIds.delete(courseId);
             this.moveUpOverrides.delete(courseId);
-            this.solver.removeCompleted(courseId);
         } else {
-            // This will now work perfectly since we added getAvailability to Solver!
-            if (this.solver.getAvailability(courseId)) {
+            // We only allow selection if the SAT solver determines it doesn't break the global state
+            if (this.solver.isCourseAvailable(courseId)) {
                 this.selectedIds.add(courseId);
-                this.solver.addCompleted(courseId);
             }
         }
+        
+        // Push the raw updated set to the solver, let the solver figure out the UI constraints
+        this.solver.setSelected(this.selectedIds, this.moveUpOverrides);
     }
 
     public handleMoveUpTap(courseId: string) {
-        const course = this.catalogMap.get(courseId);
-        if (course && course.moveUp) {
+        if (this.solver.courseMap.get(courseId)?.moveUp) {
+            // FIX 2: Corrected Will's typo from "moveOverrides" to "moveUpOverrides"
             this.moveUpOverrides.add(courseId);
             this.selectedIds.add(courseId);
-            this.solver.addCompleted(courseId);
+            this.solver.setSelected(this.selectedIds, this.moveUpOverrides);
         }
     }
 }

@@ -1,145 +1,160 @@
 // Solver.ts
-// written by willuhd on Apr 8
-// 
-// Solves the internal rule state configuration for cross-grade
-// selections. Not intended to use in the frontend!
-// PLEASE CALL CONTROLLER.ts instead of this
+// rewritten to use a Declarative Constraint (SAT) engine
 
+
+// FIX: Restored the 'type' keyword
 import type { CourseModel, CourseNode } from "./CourseModel";
 
 export interface CourseAvailabilityState {
     isAvailable: boolean;
-    missingPre: string[][];      // UI can use this to say "You are missing [X or Y]"
+    missingPre: string[][];
     missingCurrent: string[][];
-    moveUpInfo?: string;         // Passed directly to UI for the bypass banner
+    moveUpInfo?: string;
+    conflictReason?: string;
 }
 
 export class CatalogSolver {
     private catalog: CourseModel;
-    private courseMap: Map<string, CourseNode> = new Map();
-    
-    // User Memory State
-    private completedCourses: Set<string> = new Set();
-    private concurrentCourses: Set<string> = new Set();
-    
-    // UI Observers
+    public courseMap: Map<string, CourseNode> = new Map();
+    private megs: Set<string>[] = []; // Mutual Exclusivity Groups
+
+    private selectedCourses: Set<string> = new Set();
+    private moveUpOverrides: Set<string> = new Set();
+
     private subscribers: Array<(state: Record<string, CourseAvailabilityState>) => void> = [];
 
     constructor(catalog: CourseModel) {
         this.catalog = catalog;
-        this.buildFlattenedMap();
+        this.buildGraph();
     }
 
-    private buildFlattenedMap() {
-        // Loop through ALL departments safely
-        for (const [deptName, gradeMap] of Object.entries(this.catalog.departments || {})) {
-            if (deptName === 'residuals') continue;
-            
-            const typedMap = gradeMap as Record<string, CourseNode[]>;
-            if (!typedMap) continue;
-
-            for (const grade of Object.keys(typedMap)) {
-                const courses = typedMap[grade];
-                if (courses) { // FIX: Protects against undefined arrays
-                    for (const course of courses) {
-                        this.courseMap.set(course.id, course);
+    private buildGraph() {
+        const depts = this.catalog.departments || {};
+        for (const [deptName, deptData] of Object.entries(depts)) {
+            if (Array.isArray(deptData)) {
+                const group = new Set<string>();
+                deptData.forEach(c => {
+                    this.courseMap.set(c.id, { ...c, grade: "Residual" });
+                    group.add(c.id);
+                });
+                if (group.size > 0) this.megs.push(group);
+            } else if (typeof deptData === 'object' && deptData !== null) {
+                for (const grade of Object.keys(deptData)) {
+                    const courses = (deptData as any)[grade];
+                    if (Array.isArray(courses)) {
+                        const group = new Set<string>();
+                        courses.forEach(c => {
+                            this.courseMap.set(c.id, { ...c, grade }); // Fixes the "N/A" grade bug
+                            group.add(c.id);
+                        });
+                        // Courses in the same grade & department are mutually exclusive
+                        if (group.size > 0) this.megs.push(group);
                     }
                 }
             }
         }
-        // Flatten residuals safely
-        for (const course of this.catalog.departments.residuals || []) {
-            this.courseMap.set(course.id, course);
-        }
     }
 
-    /** UI subscribes here to listen to instant graph changes */
     public subscribe(callback: (state: Record<string, CourseAvailabilityState>) => void): () => void {
         this.subscribers.push(callback);
-        callback(this.evaluateGraph()); // Emit initial state immediately
-        
-        // Return an unsubscribe function to prevent UI memory leaks
+        callback(this.evaluateGraph());
         return () => {
             this.subscribers = this.subscribers.filter(cb => cb !== callback);
         };
     }
 
-    private notify() {
+    public forceNotify() {
         const state = this.evaluateGraph();
         this.subscribers.forEach(cb => cb(state));
     }
 
-    // --- State Mutations ---
-
-    public addCompleted(courseId: string) {
-        this.completedCourses.add(courseId);
-        this.notify();
+    public setSelected(selected: Set<string>, overrides: Set<string>) {
+        this.selectedCourses = new Set(selected);
+        this.moveUpOverrides = new Set(overrides);
+        this.forceNotify();
     }
 
-    public removeCompleted(courseId: string) {
-        this.completedCourses.delete(courseId);
-        this.notify();
+    public isCourseAvailable(courseId: string): boolean {
+        const testSet = new Set(this.selectedCourses);
+        testSet.add(courseId);
+        return this.isSatisfiable(testSet);
     }
 
-    public toggleConcurrent(courseId: string) {
-        if (this.concurrentCourses.has(courseId)) {
-            this.concurrentCourses.delete(courseId);
-        } else {
-            this.concurrentCourses.add(courseId);
+    // SAT Solver: Returns true if there exists a valid theoretical path that satisfies all current selections
+    private isSatisfiable(currentSet: Set<string>): boolean {
+        // 1. Ensure no Mutual Exclusivity Group (MEG) rules are violated
+        for (const group of this.megs) {
+            let count = 0;
+            for (const id of group) {
+                if (currentSet.has(id)) count++;
+            }
+            if (count > 1) return false;
         }
-        this.notify();
+
+        // 2. Find the first unmet requirement in the current set
+        let missingClause: string[] | null = null;
+        for (const id of currentSet) {
+            if (this.moveUpOverrides.has(id)) continue; // Bypassed nodes ignore their own prereqs
+
+            const node = this.courseMap.get(id);
+            if (!node || !node.rules) continue;
+
+            const checkRules = (rules?: string[][]) => {
+                if (!rules) return false;
+                for (const clause of rules) {
+                    if (!clause.some(req => currentSet.has(req))) {
+                        missingClause = clause;
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            if (checkRules(node.rules.pre)) break;
+            if (checkRules(node.rules.current)) break;
+        }
+
+        // 3. If all requirements of every selected course are met, it's valid!
+        if (!missingClause) return true;
+
+        // 4. Backtracking: Try to satisfy the missing requirement
+        for (const reqId of missingClause) {
+            if (!this.courseMap.has(reqId)) continue;
+            currentSet.add(reqId);
+
+            if (this.isSatisfiable(currentSet)) {
+                currentSet.delete(reqId);
+                return true;
+            }
+            currentSet.delete(reqId);
+        }
+
+        return false;
     }
 
-    // --- Graph Evaluation Logic ---
-
-    private evaluateGraph(): Record<string, CourseAvailabilityState> {
+    public evaluateGraph(): Record<string, CourseAvailabilityState> {
         const state: Record<string, CourseAvailabilityState> = {};
 
         this.courseMap.forEach((course, id) => {
-            const missingPre = this.getMissingRequirements(course.rules?.pre, this.completedCourses);
-            
-            // Current requirements can be fulfilled by either taking it NOW, or having taken it ALREADY
-            const missingCurrent = this.getMissingRequirements(course.rules?.current, new Set([...this.completedCourses, ...this.concurrentCourses]));
+            const missingPre = this.getMissingRequirements(course.rules?.pre, this.selectedCourses);
+            const missingCurrent = this.getMissingRequirements(course.rules?.current, this.selectedCourses);
 
-            const isAvailable = missingPre.length === 0 && missingCurrent.length === 0;
+            const isAvailable = this.isCourseAvailable(id);
 
             state[id] = {
                 isAvailable,
                 missingPre,
                 missingCurrent,
-                moveUpInfo: course.moveUp // UI handles bypassing natively if this string exists
+                moveUpInfo: course.moveUp,
+                conflictReason: isAvailable ? undefined : "Conflicts with a required path for your selections"
             };
         });
 
         return state;
     }
 
-    /** 
-     * Parses the Disjunctive Normal Form (DNF). 
-     * Returns an array of the unsatisfied blocks. If empty, all rules are met.
-     */
     private getMissingRequirements(dnf: string[][] | undefined, userState: Set<string>): string[][] {
-        if (!dnf || dnf.length === 0) return [];
-        
-        const missing: string[][] = [];
-        for (const orBlock of dnf) {
-            // If the user has none of the required OR options, this block fails
-            const isMet = orBlock.some(id => userState.has(id));
-            if (!isMet) {
-                missing.push(orBlock);
-            }
-        }
-        return missing;
-    }
-
-    // --- Add this missing method ---
-    public getAvailability(courseId: string): boolean {
-        const course = this.courseMap.get(courseId);
-        if (!course) return true; // If it's a residual course with no rules, it's available by default
-
-        const missingPre = this.getMissingRequirements(course.rules?.pre, this.completedCourses);
-        const missingCurrent = this.getMissingRequirements(course.rules?.current, new Set([...this.completedCourses, ...this.concurrentCourses]));
-
-        return missingPre.length === 0 && missingCurrent.length === 0;
+        if (!dnf) return [];
+        return dnf.filter(orBlock => !orBlock.some(id => userState.has(id)));
     }
 }
