@@ -4,14 +4,15 @@
 // - No backend logic
 // - Use this for frontend !!! And use Controller.ts to control it!
 
+export type CourseStatus = 'locked' | 'available' | 'selected' | 'bypassed';
+
 export interface CourseViewModel {
     id: string;
     name: string;
     grade: string;
-    level: string;
     
     // UI State
-    status: 'locked' | 'available' | 'selected' | 'bypassed'; 
+    status: CourseStatus; 
     
     // Display Strings (Backend handles the formatting)
     lockReason?: string;       // e.g., "Requires: Bio 9 Honors"

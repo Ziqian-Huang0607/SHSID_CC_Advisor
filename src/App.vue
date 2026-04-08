@@ -1,17 +1,7 @@
 <template>
   <div 
-    class="min-h-screen bg-[#F2F2F7] dark:bg-black text-[#1C1C1E] dark:text-[#F2F2F7] p-4 md:p-8 font-sans transition-colors duration-500 relative overflow-hidden flex flex-col antialiased selection:bg-cyan-500/30"
-    @mousemove="handleMouseMove"
+    class="min-h-screen bg-[#F2F2F7] dark:bg-black text-[#1C1C1E] dark:text-[#F2F2F7] p-4 md:p-8 font-sans transition-colors duration-300 relative overflow-hidden flex flex-col antialiased selection:bg-cyan-500/30"
   >
-    
-    <!-- 🌟 RESTORED: THE GLOWING CURSOR 🌟 -->
-    <div 
-      class="pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
-      :style="{
-        background: `radial-gradient(600px circle at ${mouseX}px ${mouseY}px, ${isDarkMode ? 'rgba(34, 211, 238, 0.15)' : 'rgba(34, 211, 238, 0.1)'}, transparent 40%)`
-      }"
-    ></div>
-
     <!-- Header -->
     <header class="flex flex-wrap justify-between items-center gap-6 mb-8 relative z-10 shrink-0 max-w-[1400px] mx-auto w-full">
       <div class="flex flex-col">
@@ -21,7 +11,7 @@
         <p class="text-[#8E8E93] dark:text-[#98989D] mt-1 font-medium text-sm flex items-center gap-2">
           <span>v{{ catalogData?.version || '1.0' }}</span>
           <span class="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-700"></span>
-          <span>Build your 4-year schedule</span>
+          <span>Build your 4-year plan</span>
         </p>
       </div>
       
@@ -55,7 +45,7 @@
     <!-- The Swimlane Matrix -->
     <div v-else class="w-full max-w-[1400px] mx-auto overflow-x-auto pb-10 relative z-10 animate-fade-in-up flex-grow custom-scrollbar">
       <!-- 🌟 ENHANCED GLASSMORPHISM: Heavier blur, more translucency, and inner shadow 🌟 -->
-      <div class="min-w-[1000px] border border-black/5 dark:border-white/10 rounded-[2rem] bg-white/50 dark:bg-black/20 backdrop-blur-3xl overflow-hidden shadow-2xl shadow-black/10 dark:shadow-black/20 shadow-inner-sm">
+      <div class="min-w-[1000px] border border-black/5 dark:border-white/10 rounded-[2rem] bg-white/70 dark:bg-black/35 backdrop-blur-xl overflow-hidden shadow-xl shadow-black/8 dark:shadow-black/20">
         
         <div class="grid grid-cols-[180px_1fr_1fr_1fr_1fr] bg-black/[0.02] dark:bg-white/[0.02] border-b border-black/5 dark:border-white/5">
           <div class="p-5 font-semibold text-[#8E8E93] dark:text-[#98989D] uppercase text-xs tracking-wider flex items-center">
@@ -87,25 +77,45 @@
           <div v-for="grade in ['9', '10', '11', '12']" :key="grade" class="p-4 flex flex-col gap-3 border-r border-black/5 dark:border-white/5">
             <div v-show="!collapsedDepts.has(dept)" class="flex flex-col gap-3 h-full">
               
-              <button 
+              <div 
                 v-for="course in getCourses(dept, grade)" 
                 :key="course.id"
-                @click="viewingCourseId = course.id"
-                :class="[ 
-                  'text-left w-full p-4 rounded-2xl transition-all duration-300 relative group overflow-hidden outline-none shadow-inner-sm',
-                  getCardStyles(course.id)
-                ]"
+                class="relative"
               >
-                <div class="absolute top-4 right-4 flex gap-1">
-                  <div v-if="viewState[course.id]?.status === 'locked'" class="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-600"></div>
-                  <div v-if="viewState[course.id]?.status === 'selected'" class="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
-                  <div v-if="viewState[course.id]?.status === 'bypassed'" class="w-2 h-2 rounded-full bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]"></div>
-                </div>
+                <button
+                  type="button"
+                  @click="toggleCourseSelection(course.id)"
+                  :disabled="!canToggleCourse(course.id)"
+                  :aria-pressed="isCourseSelected(course.id)"
+                  :class="[
+                    'w-full min-h-[104px] text-left p-4 pr-14 rounded-2xl relative overflow-hidden border transition-transform duration-150 active:scale-[0.97] disabled:active:scale-100',
+                    getCardStyles(course.id)
+                  ]"
+                >
+                  <h3 class="font-bold text-[14px] leading-snug">{{ viewState[course.id]?.name || course.raw.name }}</h3>
+                </button>
 
-                <p class="text-[10px] font-semibold tracking-wider opacity-50 uppercase mb-1">{{ viewState[course.id]?.level || course.raw.level || 'Standard' }} LEVEL</p>
-                <h3 class="font-bold text-[14px] leading-snug relative z-10">{{ viewState[course.id]?.name || course.raw.name }}</h3>
-                <p class="text-[11px] font-medium opacity-60 relative z-10 mt-1">{{ course.id }}</p>
-              </button>
+                <button
+                  type="button"
+                  @click.stop="openCourseInfo(course.id)"
+                  class="absolute top-3 right-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/5 dark:border-white/10 bg-white/85 dark:bg-black/45 text-black/65 dark:text-white/75 transition-colors hover:text-black hover:bg-white dark:hover:text-white dark:hover:bg-black/60"
+                  aria-label="Open course information"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8h.01M11 12h1v4h1m-1 5a9 9 0 110-18 9 9 0 010 18z" />
+                  </svg>
+                </button>
+
+                <div
+                  v-if="getWarningMessage(course.id)"
+                  :title="getWarningMessage(course.id) || undefined"
+                  class="absolute bottom-3 right-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#FFD60A]/15 text-[#C47F00] dark:text-[#FFD60A]"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 3.75a1.5 1.5 0 011.299.75l7.5 13A1.5 1.5 0 0119.5 19.75h-15a1.5 1.5 0 01-1.299-2.25l7.5-13A1.5 1.5 0 0112 3.75zm0 4.5a.75.75 0 00-.75.75v4.5a.75.75 0 001.5 0V9a.75.75 0 00-.75-.75zm0 8a1 1 0 100-2 1 1 0 000 2z" />
+                  </svg>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -139,7 +149,7 @@
     <!-- Side Panel -->
     <Transition name="slide-sheet">
       <!-- 🌟 ENHANCED GLASSMORPHISM: Extreme blur, new colors, deeper shadows 🌟 -->
-      <div v-if="viewingCourseId" class="fixed inset-y-4 right-4 w-[400px] bg-white/60 dark:bg-black/50 backdrop-blur-[50px] shadow-2xl shadow-black/20 border border-white/80 dark:border-white/10 rounded-[2rem] z-[60] p-8 overflow-y-auto custom-scrollbar flex flex-col">
+      <div v-if="viewingCourseId" class="fixed inset-y-4 inset-x-4 md:left-auto md:right-4 md:w-[420px] bg-white/80 dark:bg-black/65 backdrop-blur-xl shadow-2xl shadow-black/20 border border-white/80 dark:border-white/10 rounded-[2rem] z-[60] p-8 overflow-y-auto custom-scrollbar flex flex-col">
         
         <div class="flex justify-between items-start mb-6">
           <div class="px-3 py-1 bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 font-semibold text-[10px] uppercase tracking-wider rounded-full">
@@ -151,24 +161,23 @@
         </div>
         
         <h2 class="text-3xl font-bold leading-tight tracking-tight text-black dark:text-white">{{ activeVm?.name || activeRaw?.raw.name }}</h2>
-        <p class="text-[#8E8E93] text-sm font-medium mt-1 mb-8">{{ activeVm?.id || activeRaw?.id }} • {{ activeVm?.level || activeRaw?.raw.level || 'Standard' }} Level</p>
+        <p class="text-[#8E8E93] text-sm font-medium mt-2 mb-8">{{ viewingCourseId ? getCardStatusText(viewingCourseId) : '' }}</p>
 
         <!-- Action Buttons -->
         <div class="mb-8 space-y-3">
-          <button 
-            v-if="['selected', 'bypassed'].includes(activeVm?.status || '')"
-            @click="controller?.handleTap(viewingCourseId!)"
-            class="w-full py-3.5 rounded-2xl font-semibold bg-[#FF3B30] hover:bg-[#FF453A] text-white shadow-sm transition-all active:scale-[0.98]"
+          <button
+            v-if="viewingCourseId && activeVm && ['selected', 'bypassed', 'available'].includes(activeVm.status)"
+            type="button"
+            @click="toggleCourseSelection(viewingCourseId)"
+            class="w-full inline-flex items-center justify-between gap-4 rounded-[1.5rem] px-4 py-4 border border-black/5 dark:border-white/10 bg-white/70 dark:bg-white/10 transition-all hover:bg-white dark:hover:bg-white/15 active:scale-[0.99]"
           >
-            Remove from Plan
-          </button>
-
-          <button 
-            v-else-if="activeVm?.status === 'available'"
-            @click="controller?.handleTap(viewingCourseId!)"
-            class="w-full py-3.5 rounded-2xl font-semibold bg-[#007AFF] hover:bg-[#0A84FF] text-white shadow-sm transition-all active:scale-[0.98]"
-          >
-            Add to Plan
+            <div class="flex flex-col items-start text-left">
+              <span class="text-sm font-semibold text-black dark:text-white">{{ getPanelActionLabel(viewingCourseId) }}</span>
+              <span class="text-xs text-[#8E8E93] dark:text-[#98989D]">{{ getCardStatusText(viewingCourseId) }}</span>
+            </div>
+            <span class="text-xs font-semibold uppercase tracking-[0.24em] text-[#8E8E93] dark:text-[#98989D]">
+              {{ isCourseSelected(viewingCourseId) ? 'On' : 'Off' }}
+            </span>
           </button>
 
           <div v-else-if="activeVm?.status === 'locked'" class="w-full p-4 bg-gray-100 dark:bg-white/5 rounded-2xl text-gray-600 dark:text-gray-300 text-sm font-medium flex flex-col gap-1 border border-black/5 dark:border-white/5">
@@ -232,9 +241,10 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import gsap from 'gsap';
 
-import { CourseSelectionController, type CourseViewModel } from './backend/Controller';
+import { CourseSelectionController } from './backend/Controller';
 import { Updater } from './backend/Updater';
 import type { CourseModel, CourseNode } from './backend/CourseModel';
+import type { CourseViewModel } from './backend/ViewModel';
 
 // --- All script logic remains identical to the previous version ---
 const catalogData = ref<CourseModel | null>(null);
@@ -245,13 +255,6 @@ const viewingCourseId = ref<string | null>(null);
 const isDarkMode = ref<boolean>(true);
 const searchQuery = ref<string>('');
 const collapsedDepts = ref<Set<string>>(new Set());
-
-const mouseX = ref(0);
-const mouseY = ref(0);
-const handleMouseMove = (e: MouseEvent) => {
-  mouseX.value = e.clientX;
-  mouseY.value = e.clientY;
-};
 
 onMounted(async () => {
   if (isDarkMode.value) document.documentElement.classList.add('dark');
@@ -287,18 +290,23 @@ const toggleDept = (dept: string) => {
 
 const allCourses = computed(() => {
   if (!catalogData.value) return [];
-  const list: { id: string, dept: string, grade: string, raw: CourseNode }[] = [];
+  const list: Array<{ id: string; dept: string; grade: string; raw: CourseNode; searchText: string }> = [];
   
   for (const [dept, gradesObj] of Object.entries(catalogData.value.departments)) {
     if (dept === 'residuals') continue; 
     
-    // FIX: Tell TypeScript exactly what shape this object is
     const typedGradesObj = gradesObj as Record<string, CourseNode[]>;
     
     for (const [gradeLevel, courseArray] of Object.entries(typedGradesObj)) {
       if (courseArray) {
         for (const course of courseArray) {
-          list.push({ id: course.id, dept, grade: gradeLevel, raw: course });
+          list.push({
+            id: course.id,
+            dept,
+            grade: gradeLevel,
+            raw: course,
+            searchText: `${course.id} ${course.name || ''}`.toLowerCase()
+          });
         }
       }
     }
@@ -306,25 +314,94 @@ const allCourses = computed(() => {
   return list;
 });
 
-const activeDepartments = computed(() => {
-  const depts = Array.from(new Set(allCourses.value.map(c => c.dept)));
-  if (!searchQuery.value) return depts;
-  
-  const query = searchQuery.value.toLowerCase();
-  return depts.filter(dept => {
-    return allCourses.value.some(c => 
-      c.dept === dept && 
-      ((c.raw.name && c.raw.name.toLowerCase().includes(query)) || c.id.toLowerCase().includes(query))
-    );
+const visibleCoursesByBucket = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase();
+  const buckets = new Map<string, Array<{ id: string; dept: string; grade: string; raw: CourseNode }>>();
+
+  allCourses.value.forEach(course => {
+    if (query && !course.searchText.includes(query)) return;
+
+    const key = `${course.dept}::${course.grade}`;
+    const bucket = buckets.get(key) ?? [];
+    bucket.push({
+      id: course.id,
+      dept: course.dept,
+      grade: course.grade,
+      raw: course.raw
+    });
+    buckets.set(key, bucket);
   });
+
+  return buckets;
 });
 
-const getCourses = (dept: string, grade: string) => {
-  const query = searchQuery.value.toLowerCase();
-  return allCourses.value.filter(c => {
-    const isMatch = (c.raw.name && c.raw.name.toLowerCase().includes(query)) || c.id.toLowerCase().includes(query);
-    return c.dept === dept && c.grade === grade && isMatch;
-  });
+const activeDepartments = computed(() =>
+  Array.from(
+    new Set(
+      [...visibleCoursesByBucket.value.values()].flatMap(courses => courses.map(course => course.dept))
+    )
+  )
+);
+
+const getCourses = (dept: string, grade: string) =>
+  visibleCoursesByBucket.value.get(`${dept}::${grade}`) || [];
+
+const openCourseInfo = (courseId: string) => {
+  viewingCourseId.value = courseId;
+};
+
+const canToggleCourse = (courseId: string): boolean => {
+  const status = viewState.value[courseId]?.status;
+  return status === 'available' || status === 'selected' || status === 'bypassed';
+};
+
+const isCourseSelected = (courseId: string): boolean => {
+  const status = viewState.value[courseId]?.status;
+  return status === 'selected' || status === 'bypassed';
+};
+
+const toggleCourseSelection = (courseId: string) => {
+  if (!canToggleCourse(courseId)) return;
+  controller.value?.handleTap(courseId);
+};
+
+const getWarningMessage = (courseId: string): string | undefined => {
+  const vm = viewState.value[courseId];
+  return vm?.status === 'locked' ? vm.lockReason : undefined;
+};
+
+const getCardStatusText = (courseId: string): string => {
+  const vm = viewState.value[courseId];
+  if (!vm) return 'Checking.';
+
+  switch (vm.status) {
+    case 'selected':
+      return 'Selected.';
+    case 'bypassed':
+      return 'Bypassed.';
+    case 'available':
+      return 'Available.';
+    case 'locked':
+    default:
+      return vm.lockReason || 'Unavailable.';
+  }
+};
+
+const getPanelActionLabel = (courseId: string): string => {
+  const vm = viewState.value[courseId];
+  if (!vm) return 'Select';
+
+  switch (vm.status) {
+    case 'selected':
+      return 'Remove from plan';
+    case 'bypassed':
+      return 'Remove from plan';
+    case 'available':
+      return 'Add to plan';
+    case 'locked':
+    default:
+      return 'Unavailable';
+  }
 };
 
 const activeVm = computed(() => viewingCourseId.value ? viewState.value[viewingCourseId.value] : null);
@@ -348,20 +425,20 @@ watch(viewingCourseId, (newId) => {
 const getCardStyles = (courseId: string): string => {
   const vm = viewState.value[courseId];
   const isViewing = viewingCourseId.value === courseId;
-  const viewingRing = isViewing ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-black ' : 'border ';
+  const viewingRing = isViewing ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-black ' : '';
 
-  if (!vm) return viewingRing + 'bg-white/40 dark:bg-[#2C2C2E]/40 border-black/5 dark:border-white/5 text-gray-500 opacity-60 hover:opacity-100 transition-all';
+  if (!vm) return viewingRing + 'bg-white/50 dark:bg-[#2C2C2E]/50 border-black/5 dark:border-white/5 text-gray-500';
 
   switch (vm.status) {
     case 'selected':
-      return viewingRing + 'bg-blue-500 border-blue-500 text-white shadow-md hover:bg-blue-600';
+      return viewingRing + 'bg-blue-500 border-blue-500 text-white shadow-sm hover:bg-blue-600';
     case 'bypassed':
-      return viewingRing + 'bg-orange-500 border-orange-500 text-white shadow-md hover:bg-orange-600';
+      return viewingRing + 'bg-orange-500 border-orange-500 text-white shadow-sm hover:bg-orange-600';
     case 'available':
-      return viewingRing + 'bg-white/60 dark:bg-[#2C2C2E]/60 border-black/5 dark:border-white/10 backdrop-blur-md text-black dark:text-white hover:bg-white/80 dark:hover:bg-[#3A3A3C]/80 shadow-sm hover:shadow-lg';
+      return viewingRing + 'bg-white/75 dark:bg-[#2C2C2E]/75 border-black/5 dark:border-white/10 text-black dark:text-white hover:bg-white dark:hover:bg-[#3A3A3C] shadow-sm';
     case 'locked':
     default:
-      return viewingRing + 'bg-gray-100/30 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-400 dark:text-gray-500 opacity-70 hover:opacity-100 transition-opacity';
+      return viewingRing + 'bg-gray-100/65 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400';
   }
 };
 </script>

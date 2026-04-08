@@ -1,18 +1,8 @@
 // Controller.ts
 
-// FIX 1: Restored the 'type' keywords for Vite compatibility
 import { CatalogSolver, type CourseAvailabilityState } from "./Solver";
-import type { CourseModel, CourseNode } from "./CourseModel";
-
-export interface CourseViewModel {
-    id: string;
-    name: string;
-    grade: string;
-    level: string;
-    status: 'locked' | 'available' | 'selected' | 'bypassed';
-    lockReason?: string;
-    moveUpNote?: string;
-}
+import type { CourseModel } from "./CourseModel";
+import type { CourseStatus, CourseViewModel } from "./ViewModel";
 
 export class CourseSelectionController {
     private solver: CatalogSolver;
@@ -33,7 +23,7 @@ export class CourseSelectionController {
                 const isSelected = this.selectedIds.has(id);
                 const isBypassed = this.moveUpOverrides.has(id);
 
-                let status: CourseViewModel['status'] = 'locked';
+                let status: CourseStatus = 'locked';
                 if (isSelected && isBypassed) status = 'bypassed';
                 else if (isSelected) status = 'selected';
                 else if (solverState.isAvailable) status = 'available';
@@ -60,7 +50,6 @@ export class CourseSelectionController {
                     id: course.id,
                     name: course.name || course.id,
                     grade: course.grade || "N/A",
-                    level: course.level || "Standard",
                     status,
                     lockReason,
                     moveUpNote: course.moveUp
@@ -84,6 +73,7 @@ export class CourseSelectionController {
         } else {
             // We only allow selection if the SAT solver determines it doesn't break the global state
             if (this.solver.isCourseAvailable(courseId)) {
+                this.clearConflictingSelection(courseId);
                 this.selectedIds.add(courseId);
             }
         }
@@ -93,11 +83,24 @@ export class CourseSelectionController {
     }
 
     public handleMoveUpTap(courseId: string) {
-        if (this.solver.courseMap.get(courseId)?.moveUp) {
-            // FIX 2: Corrected Will's typo from "moveOverrides" to "moveUpOverrides"
+        if (this.solver.courseMap.get(courseId)?.moveUp && this.solver.canBypassCourse(courseId)) {
+            this.clearConflictingSelection(courseId);
             this.moveUpOverrides.add(courseId);
             this.selectedIds.add(courseId);
             this.solver.setSelected(this.selectedIds, this.moveUpOverrides);
+        }
+    }
+
+    private clearConflictingSelection(courseId: string) {
+        const targetGroupId = this.solver.getConflictGroupId(courseId);
+        if (!targetGroupId) return;
+
+        for (const selectedId of [...this.selectedIds]) {
+            if (selectedId === courseId) continue;
+            if (this.solver.getConflictGroupId(selectedId) !== targetGroupId) continue;
+
+            this.selectedIds.delete(selectedId);
+            this.moveUpOverrides.delete(selectedId);
         }
     }
 }
