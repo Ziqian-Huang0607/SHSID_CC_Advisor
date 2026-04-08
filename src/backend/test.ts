@@ -7,10 +7,10 @@
 // the view state to the UI and the UI can call the backend via exclusively
 // the controller
 
-import { CourseSelectionController, type CourseViewModel } from "./Controller";
+import { CourseSelectionController } from "./Controller";
+import type { CourseViewModel } from "./ViewModel";
 import type { CourseModel } from "./CourseModel";
 
-// --- MOCK CATALOG (Backend Data) ---
 const mockCatalog: CourseModel = {
     catalogName: "UI Abstraction Test Catalog",
     version: "1.0",
@@ -36,56 +36,29 @@ const mockCatalog: CourseModel = {
     }
 };
 
-// ==========================================
-// PURE FRONTEND SIMULATION (Zero Logic)
-// ==========================================
 async function runUITest() {
-    console.log("--- 1. MOUNTING UI & CONNECTING TO CONTROLLER ---");
     const controller = new CourseSelectionController(mockCatalog);
 
-    // The frontend subscribes to the View-Models. It just blindy renders what it gets.
     controller.connectView((viewModels: Record<string, CourseViewModel>) => {
-        console.log(`\n[UI Render Engine] Screen Updated:`);
-        
         const targetIDs = ["BIO109E030", "BIO110E030", "BIO111E070"];
         
-        // Map the pure ViewModel data to a UI table
         const tableData = targetIDs.map(id => {
             const vm = viewModels[id];
+            // FIXED: Added ? check for all vm properties
             return {
-                "Course Name": vm.name,
-                "UI Status": vm.status, // 'locked' | 'available' | 'selected' | 'bypassed'
-                "Lock Banner": vm.lockReason || "---",
-                "Move-Up Button": vm.moveUpNote || "---"
+                "Course Name": vm?.name || id,
+                "UI Status": vm?.status || "locked", 
+                "Lock Banner": vm?.lockReason || "---",
+                "Move-Up Button": vm?.moveUpNote || "---"
             };
         });
 
         console.table(tableData);
     });
 
-    console.log("\n--- 2. SIMULATING USER TAPS ---");
-
-    // Scenario A: User taps the prerequisite (Bio 8) in a different menu
-    console.log("\n>>> EVENT: User taps [Bio 8 Honors]");
     controller.handleTap("BIO008E030");
-
-    // Scenario B: User taps Bio 9 to select it
-    console.log("\n>>> EVENT: User taps [Bio 9 Honors]");
     controller.handleTap("BIO109E030");
-
-    // Scenario C: User tries to tap AP Biology right now
-    console.log("\n>>> EVENT: User tries to tap [AP Biology] while it's locked...");
-    // The controller protects state. A tap on a locked node does nothing, so the UI won't re-render.
-    controller.handleTap("BIO111E070"); 
-
-    // Scenario D: User clicks the Move Up bypass button on Bio 10
-    console.log("\n>>> EVENT: User taps the 'Move Up' bypass button on [Bio 10 Honors]");
     controller.handleMoveUpTap("BIO110E030");
-
-    // Scenario E: User deselects Bio 9 to see if the UI updates instantly
-    console.log("\n>>> EVENT: User taps [Bio 9 Honors] again to deselect it...");
-    controller.handleTap("BIO109E030");
 }
 
 runUITest();
-

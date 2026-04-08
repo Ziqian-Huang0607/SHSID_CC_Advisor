@@ -1,8 +1,6 @@
 // Solver.ts
 // rewritten to use a Declarative Constraint (SAT) engine
 
-
-// FIX: Restored the 'type' keyword
 import type { CourseModel, CourseNode } from "./CourseModel";
 
 export interface CourseAvailabilityState {
@@ -16,7 +14,7 @@ export interface CourseAvailabilityState {
 export class CatalogSolver {
     private catalog: CourseModel;
     public courseMap: Map<string, CourseNode> = new Map();
-    private megs: Set<string>[] = []; // Mutual Exclusivity Groups
+    private megs: Set<string>[] = []; 
 
     private selectedCourses: Set<string> = new Set();
     private moveUpOverrides: Set<string> = new Set();
@@ -31,23 +29,24 @@ export class CatalogSolver {
     private buildGraph() {
         const depts = this.catalog.departments || {};
         for (const [deptName, deptData] of Object.entries(depts)) {
-            if (Array.isArray(deptData)) {
+            if (deptName === 'residuals' || Array.isArray(deptData)) {
                 const group = new Set<string>();
-                deptData.forEach(c => {
+                const residuals = (deptData || []) as CourseNode[];
+                residuals.forEach(c => {
                     this.courseMap.set(c.id, { ...c, grade: "Residual" });
                     group.add(c.id);
                 });
                 if (group.size > 0) this.megs.push(group);
             } else if (typeof deptData === 'object' && deptData !== null) {
-                for (const grade of Object.keys(deptData)) {
-                    const courses = (deptData as any)[grade];
+                const gradeMap = deptData as Record<string, CourseNode[]>;
+                for (const grade of Object.keys(gradeMap)) {
+                    const courses = gradeMap[grade];
                     if (Array.isArray(courses)) {
                         const group = new Set<string>();
                         courses.forEach(c => {
-                            this.courseMap.set(c.id, { ...c, grade }); // Fixes the "N/A" grade bug
+                            this.courseMap.set(c.id, { ...c, grade }); 
                             group.add(c.id);
                         });
-                        // Courses in the same grade & department are mutually exclusive
                         if (group.size > 0) this.megs.push(group);
                     }
                 }
@@ -80,9 +79,7 @@ export class CatalogSolver {
         return this.isSatisfiable(testSet);
     }
 
-    // SAT Solver: Returns true if there exists a valid theoretical path that satisfies all current selections
     private isSatisfiable(currentSet: Set<string>): boolean {
-        // 1. Ensure no Mutual Exclusivity Group (MEG) rules are violated
         for (const group of this.megs) {
             let count = 0;
             for (const id of group) {
@@ -91,10 +88,9 @@ export class CatalogSolver {
             if (count > 1) return false;
         }
 
-        // 2. Find the first unmet requirement in the current set
         let missingClause: string[] | null = null;
         for (const id of currentSet) {
-            if (this.moveUpOverrides.has(id)) continue; // Bypassed nodes ignore their own prereqs
+            if (this.moveUpOverrides.has(id)) continue;
 
             const node = this.courseMap.get(id);
             if (!node || !node.rules) continue;
@@ -114,14 +110,13 @@ export class CatalogSolver {
             if (checkRules(node.rules.current)) break;
         }
 
-        // 3. If all requirements of every selected course are met, it's valid!
         if (!missingClause) return true;
 
-        // 4. Backtracking: Try to satisfy the missing requirement
-        for (const reqId of missingClause) {
+        // FIXED: Explicitly tell TS missingClause is string[] to avoid 'never' error
+        const targetClause: string[] = missingClause;
+        for (const reqId of targetClause) {
             if (!this.courseMap.has(reqId)) continue;
             currentSet.add(reqId);
-
             if (this.isSatisfiable(currentSet)) {
                 currentSet.delete(reqId);
                 return true;
@@ -138,7 +133,6 @@ export class CatalogSolver {
         this.courseMap.forEach((course, id) => {
             const missingPre = this.getMissingRequirements(course.rules?.pre, this.selectedCourses);
             const missingCurrent = this.getMissingRequirements(course.rules?.current, this.selectedCourses);
-
             const isAvailable = this.isCourseAvailable(id);
 
             state[id] = {
@@ -154,7 +148,7 @@ export class CatalogSolver {
     }
 
     private getMissingRequirements(dnf: string[][] | undefined, userState: Set<string>): string[][] {
-        if (!dnf) return [];
+        if (!dnf) return [] as string[][];
         return dnf.filter(orBlock => !orBlock.some(id => userState.has(id)));
     }
 }
