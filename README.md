@@ -1,6 +1,8 @@
 # SHSID Interactive Course Catalog
 
-An interactive course selection tool for SHSID students, designed to clarify pathways and enable students to quickly build their 4-year academic schedule.
+An interactive course selection tool for SHSID students, built by SHSID students at the Indexademics and Data Science teams, designed to enable students to build their 4-year plan.
+
+<img width="1054" height="679" alt="image" src="https://github.com/user-attachments/assets/6577cc8f-7d93-4ccc-86dd-151ccf0754a5" />
 
 ### Intuition
 Navigating the SHSID course catalog can be complex, with a web of prerequisites, tracks (AP, IB, A-Level), and course dependencies. We built this tool to transform the static hard-cover catalog into a dynamic, visual map that gives more accessibility to students across campus. 
@@ -30,6 +32,6 @@ We also noticed that students often don't realize which courses are for who. Eve
     Then just open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ### Support
-- **Maintenance**: Indexademics IT team
-- **Email**: `mlfusion@outlook.com`
+- **Maintenance**: Indexademics team
+- **Contact**: `mlfusion@outlook.com` / `willuhd` on WeChat for course catalog issues
 - **⚠️ Disclaimer**: This is an unofficial tool that is not affiliated with SHSID. All course information is based on the SHSID Course Catalog and is for reference purposes only. Course availability and policies are subject to change by the school administration.
