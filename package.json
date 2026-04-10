@@ -11,6 +11,7 @@
     "type-check": "vue-tsc --build"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "gsap": "^3.14.2"
   },
   "devDependencies": {
