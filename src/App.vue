@@ -463,12 +463,23 @@ const activeRaw = computed(() => viewingCourseId.value ? courseMetaById.value.ge
 const selectedPlan = computed(() => {
   const plan: Record<string, Record<string, CourseMeta[]>> = {};
   for (const course of allCourses.value) {
-    const vm = viewState.value[course.id];
-    // If it is selected or bypassed, add it to the final plan
-    if (vm && (vm.status === 'selected' || vm.status === 'bypassed')) {
-      if (!plan[course.dept]) plan[course.dept] = {};
-      if (!plan[course.dept][course.grade]) plan[course.dept][course.grade] = [];
-      plan[course.dept][course.grade].push(course);
+    const vm = viewState.value[course.id] as any; // Cast as 'any' to bypass Will's strict types temporarily
+    
+    // Check if the course is selected using Will's new boolean flag
+    if (vm && vm.isSelected) {
+      // 1. Ensure the Department exists
+      if (!plan[course.dept]) {
+        plan[course.dept] = {};
+      }
+      
+      // 2. Ensure the Grade exists inside the Department
+      const deptMap = plan[course.dept];
+      if (deptMap && !deptMap[course.grade]) {
+        deptMap[course.grade] = [];
+      }
+      
+      // 3. Safely push the course into the array (fixes the 'undefined' error)
+      deptMap?.[course.grade]?.push(course);
     }
   }
   return plan;
