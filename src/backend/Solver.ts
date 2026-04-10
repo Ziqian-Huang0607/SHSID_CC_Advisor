@@ -1,5 +1,5 @@
 // Solver.ts
-// rewritten to use an explicit dependency/conflict graph
+// rewritten to explicitly model targeted move-ups with hybrid dependency injection
 
 import type { CourseModel, CourseNode } from "./CourseModel";
 
@@ -43,30 +43,22 @@ interface ResolutionResult {
     failure?: ResolutionFailure;
 }
 
+interface EffectivePlan {
+    explicitTargets: Set<string>;
+    reqOverrides: Map<string, RequirementNode[]>;
+    sourceByTarget: Map<string, string>;
+}
+
 interface PlanResolution {
     ok: boolean;
     closure: Set<string>;
     failure?: ResolutionFailure;
 }
 
-interface EffectiveSelectionState {
-    selection: Set<string>;
-    overrides: Set<string>;
-    sourceToTarget: Map<string, string>;
-    targetToSource: Map<string, string>;
-}
-
-export interface MoveUpOpportunity {
-    sourceCourseId: string;
-    targetCourseId: string;
-    note?: string;
-}
-
 export interface CourseAvailabilityState {
     isAvailable: boolean;
     missingPre: string[][];
     missingCurrent: string[][];
-    moveUpOpportunity?: MoveUpOpportunity;
     conflictReason?: string;
 }
 
@@ -76,7 +68,7 @@ export class CatalogSolver {
     private conflictGroups: Map<string, Set<string>> = new Map();
 
     private selectedCourses: Set<string> = new Set();
-    private activeMoveUps: Set<string> = new Set();
+    private moveUps: Map<string, string> = new Map();
     private evaluationCache: Map<string, CourseAvailabilityState> = new Map();
 
     private subscribers: Array<(state: Record<string, CourseAvailabilityState>) => void> = [];
@@ -92,10 +84,7 @@ export class CatalogSolver {
         for (const [deptName, deptData] of Object.entries(depts)) {
             if (deptName === "residuals" && Array.isArray(deptData)) {
                 deptData.forEach(course => {
-                    this.addCourseNode(course, {
-                        department: deptName,
-                        grade: "Residual"
-                    });
+                    this.addCourseNode(course, { department: deptName, grade: "Residual" });
                 });
                 continue;
             }
@@ -111,11 +100,7 @@ export class CatalogSolver {
                 const group = this.conflictGroups.get(conflictGroupId) ?? new Set<string>();
 
                 courses.forEach(course => {
-                    this.addCourseNode(course, {
-                        department: deptName,
-                        grade,
-                        conflictGroupId
-                    });
+                    this.addCourseNode(course, { department: deptName, grade, conflictGroupId });
                     group.add(course.id);
                 });
 
@@ -124,10 +109,7 @@ export class CatalogSolver {
         }
     }
 
-    private addCourseNode(
-        course: CourseNode,
-        meta: { department: string; grade: string; conflictGroupId?: string }
-    ) {
+    private addCourseNode(course: CourseNode, meta: { department: string; grade: string; conflictGroupId?: string }) {
         const requirements: RequirementNode[] = [];
         const continuationTargets = new Set<string>();
 
@@ -171,9 +153,9 @@ export class CatalogSolver {
         this.subscribers.forEach(cb => cb(state));
     }
 
-    public setSelected(selected: Set<string>, activeMoveUps: Set<string>) {
+    public setSelected(selected: Set<string>, moveUps: Map<string, string>) {
         this.selectedCourses = new Set(selected);
-        this.activeMoveUps = new Set(activeMoveUps);
+        this.moveUps = new Map(moveUps);
         this.forceNotify();
     }
 
@@ -181,35 +163,11 @@ export class CatalogSolver {
         return this.evaluateCourseAvailability(courseId).isAvailable;
     }
 
-    public getMoveUpOpportunity(courseId: string): MoveUpOpportunity | undefined {
-        return this.evaluateCourseAvailability(courseId).moveUpOpportunity;
-    }
-
-    public getMoveUpTargetId(courseId: string): string | undefined {
-        return this.courseMap.get(courseId)?.moveUpTargetId;
-    }
-
-    public canBypassCourse(courseId: string): boolean {
-        const course = this.courseMap.get(courseId);
-        if (!course?.moveUpTargetId) return false;
-
-        const selected = new Set(this.selectedCourses);
-        selected.add(courseId);
-        const activeMoveUps = new Set(this.activeMoveUps);
-        activeMoveUps.add(courseId);
-
-        const effectiveState = this.buildEffectiveSelectionState(selected, activeMoveUps);
-        const projectedPlan = this.projectSelectionForCourse(courseId, effectiveState);
-        return this.resolveSelection(projectedPlan.selection, projectedPlan.overrides).ok;
-    }
-
     public evaluateGraph(): Record<string, CourseAvailabilityState> {
         const state: Record<string, CourseAvailabilityState> = {};
-
         this.courseMap.forEach((_, id) => {
             state[id] = this.evaluateCourseAvailability(id);
         });
-
         return state;
     }
 
@@ -221,206 +179,182 @@ export class CatalogSolver {
         const course = this.courseMap.get(courseId);
         if (!course) {
             const missingState: CourseAvailabilityState = {
-                isAvailable: false,
-                missingPre: [],
-                missingCurrent: [],
-                conflictReason: `Course ${courseId} is missing from the catalog graph.`
+                isAvailable: false, missingPre: [], missingCurrent: [], conflictReason: `Course ${courseId} missing.`
             };
-
             this.evaluationCache.set(cacheKey, missingState);
             return missingState;
         }
 
-        const effectiveState = this.buildEffectiveSelectionState(this.selectedCourses, this.activeMoveUps);
-        const projectedPlan = this.projectSelectionForCourse(courseId, effectiveState);
-        const resolution = this.resolveSelection(projectedPlan.selection, projectedPlan.overrides);
-        const activeMoveUpOpportunity = this.findActiveMoveUpOpportunity(courseId);
+        const projectedPlan = this.projectSelectionForCourse(courseId);
+        const resolution = this.resolvePlan(projectedPlan);
+        
         const result: CourseAvailabilityState = {
             isAvailable: resolution.ok,
-            missingPre: this.getMissingRequirements(course.rules?.pre, effectiveState.selection),
-            missingCurrent: this.getMissingRequirements(course.rules?.current, effectiveState.selection),
+            missingPre: this.getMissingRequirements(course.rules?.pre, projectedPlan.explicitTargets),
+            missingCurrent: this.getMissingRequirements(course.rules?.current, projectedPlan.explicitTargets),
             conflictReason: resolution.ok ? undefined : this.describeFailure(resolution.failure, courseId),
-            moveUpOpportunity: activeMoveUpOpportunity || (resolution.ok || effectiveState.selection.has(courseId)
-                ? undefined
-                : this.findMoveUpOpportunity(courseId))
         };
 
         this.evaluationCache.set(cacheKey, result);
         return result;
     }
 
-    private buildEffectiveSelectionState(
-        selected: Set<string>,
-        activeMoveUps: Set<string>
-    ): EffectiveSelectionState {
-        const selection = new Set<string>();
-        const overrides = new Set<string>();
-        const sourceToTarget = new Map<string, string>();
-        const targetToSource = new Map<string, string>();
+    private projectSelectionForCourse(courseId: string): EffectivePlan {
+        const selected = new Set(this.selectedCourses);
+        const moveUps = new Map(this.moveUps);
 
-        for (const selectedId of selected) {
-            const course = this.courseMap.get(selectedId);
-            const targetId = activeMoveUps.has(selectedId) ? course?.moveUpTargetId : undefined;
+        const courseGroup = this.getConflictGroupId(courseId);
 
-            if (targetId && this.courseMap.has(targetId)) {
-                selection.add(targetId);
-                overrides.add(targetId);
-                sourceToTarget.set(selectedId, targetId);
-                targetToSource.set(targetId, selectedId);
-                continue;
+        // If simulating this course, dynamically wipe selections overlapping its target space
+        if (courseGroup) {
+            for (const s of [...selected]) {
+                if (s === courseId) continue;
+                const t = moveUps.get(s) || s;
+                
+                if (this.getConflictGroupId(t) === courseGroup || this.getConflictGroupId(s) === courseGroup) {
+                    selected.delete(s);
+                    moveUps.delete(s);
+                }
             }
-
-            selection.add(selectedId);
         }
 
-        return {
-            selection,
-            overrides,
-            sourceToTarget,
-            targetToSource
+        selected.add(courseId);
+        return this.buildEffectivePlan(selected, moveUps);
+    }
+
+    private buildEffectivePlan(selected: Set<string>, moveUps: Map<string, string>): EffectivePlan {
+        const explicitTargets = new Set<string>();
+        const reqOverrides = new Map<string, RequirementNode[]>();
+        const sourceByTarget = new Map<string, string>();
+
+        for (const s of selected) {
+            const t = moveUps.get(s);
+            if (t) {
+                // Course replaced via Move-Up 
+                explicitTargets.add(t);
+                sourceByTarget.set(t, s);
+                const sNode = this.courseMap.get(s);
+                if (sNode) {
+                    reqOverrides.set(t, sNode.requirements); // For pre-requisites mapping
+                }
+            } else {
+                explicitTargets.add(s);
+            }
+        }
+
+        return { explicitTargets, reqOverrides, sourceByTarget };
+    }
+
+    private resolvePlan(plan: EffectivePlan): PlanResolution {
+        let context: ResolutionContext = {
+            closure: new Set(),
+            occupancy: new Map(),
+            resolved: new Set()
         };
-    }
 
-    private findMoveUpOpportunity(courseId: string): MoveUpOpportunity | undefined {
-        for (const selectedId of this.selectedCourses) {
-            if (this.activeMoveUps.has(selectedId)) continue;
+        const sortedTargets = [...plan.explicitTargets].sort();
 
-            const sourceCourse = this.courseMap.get(selectedId);
-            const targetCourseId = sourceCourse?.moveUpTargetId;
-            if (!sourceCourse?.moveUp || !targetCourseId || !this.courseMap.has(targetCourseId)) continue;
+        // 1. Group conflict detection on pure occupancy
+        for (const target of sortedTargets) {
+            const course = this.courseMap.get(target);
+            if (!course) {
+                return { ok: false, closure: context.closure, failure: { type: "missing_reference", sourceCourseId: target, targetCourseId: target } };
+            }
 
-            const projectedMoveUps = new Set(this.activeMoveUps);
-            projectedMoveUps.add(selectedId);
-
-            const effectiveState = this.buildEffectiveSelectionState(this.selectedCourses, projectedMoveUps);
-            const projectedPlan = this.projectSelectionForCourse(courseId, effectiveState);
-            const resolution = this.resolveSelection(projectedPlan.selection, projectedPlan.overrides);
-
-            if (resolution.ok) {
-                return {
-                    sourceCourseId: selectedId,
-                    targetCourseId,
-                    note: sourceCourse.moveUp
-                };
+            if (course.conflictGroupId) {
+                const occupiedBy = context.occupancy.get(course.conflictGroupId);
+                if (occupiedBy && occupiedBy !== target) {
+                    return { ok: false, closure: context.closure, failure: { type: "group_conflict", sourceCourseId: target, targetCourseId: target, blockerCourseId: occupiedBy } };
+                }
+                context.occupancy.set(course.conflictGroupId, target);
             }
         }
 
-        return undefined;
-    }
-
-    private findActiveMoveUpOpportunity(courseId: string): MoveUpOpportunity | undefined {
-        if (this.activeMoveUps.size === 0) return undefined;
-
-        for (const sourceId of this.activeMoveUps) {
-            const sourceCourse = this.courseMap.get(sourceId);
-            const targetCourseId = sourceCourse?.moveUpTargetId;
-            if (!sourceCourse?.moveUp || !targetCourseId || !this.courseMap.has(targetCourseId)) continue;
-
-            const projectedMoveUps = new Set(this.activeMoveUps);
-            projectedMoveUps.delete(sourceId);
-
-            const effectiveState = this.buildEffectiveSelectionState(this.selectedCourses, projectedMoveUps);
-            const projectedPlan = this.projectSelectionForCourse(courseId, effectiveState);
-            const resolution = this.resolveSelection(projectedPlan.selection, projectedPlan.overrides);
-
-            if (!resolution.ok) {
-                return {
-                    sourceCourseId: sourceId,
-                    targetCourseId,
-                    note: sourceCourse.moveUp
-                };
-            }
-        }
-
-        return undefined;
-    }
-
-    private resolveSelection(targetSelection: Set<string>, overrides: Set<string>): PlanResolution {
-        const baseContext = this.createBaseContext(targetSelection);
-        if (!baseContext.ok) {
-            return {
-                ok: false,
-                closure: new Set(targetSelection),
-                failure: baseContext.failure
-            };
-        }
-
-        let context = baseContext.context;
-        for (const courseId of targetSelection) {
-            const result = this.resolveCourse(courseId, context, [], overrides);
+        // 2. DFS for recursive prerequisite validation
+        for (const target of sortedTargets) {
+            const result = this.resolveCourse(target, context, [], plan);
             if (!result.ok) {
-                return {
-                    ok: false,
-                    closure: result.context.closure,
-                    failure: result.failure
-                };
+                return { ok: false, closure: result.context.closure, failure: result.failure };
             }
-
             context = result.context;
         }
 
-        const continuationFailure = this.findContinuationConflict(context.closure);
+        // 3. Upward track continuity check
+        const continuationFailure = this.findContinuationConflict(context.closure, plan);
         if (continuationFailure) {
-            return {
-                ok: false,
-                closure: context.closure,
-                failure: continuationFailure
-            };
+            return { ok: false, closure: context.closure, failure: continuationFailure };
         }
 
-        return {
-            ok: true,
-            closure: context.closure
-        };
+        return { ok: true, closure: context.closure };
     }
 
-    private createBaseContext(targetSelection: Set<string>): ResolutionResult {
-        const context: ResolutionContext = {
-            closure: new Set(targetSelection),
-            occupancy: new Map<string, string>(),
-            resolved: new Set<string>()
-        };
+    private resolveCourse(
+        courseId: string,
+        context: ResolutionContext,
+        path: string[],
+        plan: EffectivePlan
+    ): ResolutionResult {
+        if (context.resolved.has(courseId)) return { ok: true, context };
+        if (path.includes(courseId)) return { ok: false, context, failure: { type: "cycle", sourceCourseId: courseId, path: [...path, courseId] } };
 
-        for (const courseId of targetSelection) {
-            const course = this.courseMap.get(courseId);
-            if (!course) {
-                return {
-                    ok: false,
-                    context,
-                    failure: {
-                        type: "missing_reference",
-                        sourceCourseId: courseId,
-                        targetCourseId: courseId
-                    }
-                };
-            }
+        const course = this.courseMap.get(courseId);
+        if (!course) {
+            return { ok: false, context, failure: { type: "missing_reference", sourceCourseId: path[path.length - 1] || courseId, targetCourseId: courseId, path: [...path, courseId] } };
+        }
 
-            if (!course.conflictGroupId) continue;
+        let workingContext = this.cloneContext(context);
+        workingContext.closure.add(courseId);
 
-            const occupiedBy = context.occupancy.get(course.conflictGroupId);
+        if (course.conflictGroupId) {
+            const occupiedBy = workingContext.occupancy.get(course.conflictGroupId);
             if (occupiedBy && occupiedBy !== courseId) {
-                return {
-                    ok: false,
-                    context,
-                    failure: {
-                        type: "group_conflict",
-                        sourceCourseId: courseId,
-                        targetCourseId: courseId,
-                        blockerCourseId: occupiedBy
-                    }
-                };
+                return { ok: false, context, failure: { type: "group_conflict", sourceCourseId: path[path.length - 1] || courseId, targetCourseId: courseId, blockerCourseId: occupiedBy, path: [...path, courseId] } };
             }
-
-            context.occupancy.set(course.conflictGroupId, courseId);
+            workingContext.occupancy.set(course.conflictGroupId, courseId);
         }
 
-        return {
-            ok: true,
-            context
-        };
+        // Swap checking logic for move-up targets 
+        const reqs = plan.reqOverrides.get(courseId) ?? course.requirements;
+        const nextPath = [...path, courseId];
+
+        for (const requirement of reqs) {
+            const reqResult = this.resolveRequirement(requirement, workingContext, nextPath, plan);
+            if (!reqResult.ok) return reqResult;
+            workingContext = reqResult.context;
+        }
+
+        workingContext.resolved.add(courseId);
+        return { ok: true, context: workingContext };
     }
 
-    private findContinuationConflict(closure: Set<string>): ResolutionFailure | undefined {
+    private resolveRequirement(requirement: RequirementNode, context: ResolutionContext, path: string[], plan: EffectivePlan): ResolutionResult {
+        const failures: ResolutionFailure[] = [];
+        const orderedOptions = this.orderRequirementOptions(requirement.options, context);
+
+        for (const optionId of orderedOptions) {
+            if (!this.courseMap.has(optionId)) {
+                failures.push({ type: "missing_reference", sourceCourseId: requirement.courseId, requirement, targetCourseId: optionId, path: [...path, optionId] });
+                continue;
+            }
+
+            const branchContext = this.cloneContext(context);
+            const branchResult = this.resolveCourse(optionId, branchContext, path, plan);
+            
+            if (branchResult.ok) {
+                const continuationFailure = this.findContinuationConflict(branchResult.context.closure, plan);
+                if (continuationFailure) {
+                    failures.push(continuationFailure);
+                    continue;
+                }
+                return branchResult;
+            }
+            if (branchResult.failure) failures.push(branchResult.failure);
+        }
+
+        return { ok: false, context, failure: { type: "dead_end", sourceCourseId: requirement.courseId, requirement, path, causes: failures } };
+    }
+
+    private findContinuationConflict(closure: Set<string>, plan: EffectivePlan): ResolutionFailure | undefined {
         for (const sourceCourseId of closure) {
             const sourceCourse = this.courseMap.get(sourceCourseId);
             if (!sourceCourse || sourceCourse.continuationTargets.length === 0) continue;
@@ -433,10 +367,17 @@ export class CatalogSolver {
             if (!nextGradeGroup) continue;
 
             const allowedTargets = new Set(sourceCourse.continuationTargets);
+            
             for (const targetCourseId of nextGradeGroup) {
                 if (targetCourseId === sourceCourseId) continue;
-                if (allowedTargets.has(targetCourseId)) continue;
                 if (!closure.has(targetCourseId)) continue;
+
+                // When previous courses check valid continuing paths, a targeted move-up counts as its base root S
+                const originalIdentity = plan.sourceByTarget.get(targetCourseId) || targetCourseId;
+
+                if (allowedTargets.has(targetCourseId) || allowedTargets.has(originalIdentity)) {
+                    continue;
+                }
 
                 return {
                     type: "track_lock",
@@ -447,146 +388,7 @@ export class CatalogSolver {
                 };
             }
         }
-
         return undefined;
-    }
-
-    private resolveCourse(
-        courseId: string,
-        context: ResolutionContext,
-        path: string[],
-        overrides: Set<string>
-    ): ResolutionResult {
-        const course = this.courseMap.get(courseId);
-        if (!course) {
-            return {
-                ok: false,
-                context,
-                failure: {
-                    type: "missing_reference",
-                    sourceCourseId: path[path.length - 1] || courseId,
-                    targetCourseId: courseId,
-                    path: [...path, courseId]
-                }
-            };
-        }
-
-        if (context.resolved.has(courseId)) {
-            return {
-                ok: true,
-                context
-            };
-        }
-
-        if (path.includes(courseId)) {
-            return {
-                ok: false,
-                context,
-                failure: {
-                    type: "cycle",
-                    sourceCourseId: courseId,
-                    path: [...path, courseId]
-                }
-            };
-        }
-
-        let workingContext = this.cloneContext(context);
-        workingContext.closure.add(courseId);
-
-        if (course.conflictGroupId) {
-            const occupiedBy = workingContext.occupancy.get(course.conflictGroupId);
-            if (occupiedBy && occupiedBy !== courseId) {
-                return {
-                    ok: false,
-                    context,
-                    failure: {
-                        type: "group_conflict",
-                        sourceCourseId: path[path.length - 1] || courseId,
-                        targetCourseId: courseId,
-                        blockerCourseId: occupiedBy,
-                        path: [...path, courseId]
-                    }
-                };
-            }
-
-            workingContext.occupancy.set(course.conflictGroupId, courseId);
-        }
-
-        if (overrides.has(courseId)) {
-            workingContext.resolved.add(courseId);
-            return {
-                ok: true,
-                context: workingContext
-            };
-        }
-
-        const nextPath = [...path, courseId];
-
-        for (const requirement of course.requirements) {
-            const requirementResult = this.resolveRequirement(requirement, workingContext, nextPath, overrides);
-            if (!requirementResult.ok) {
-                return requirementResult;
-            }
-
-            workingContext = requirementResult.context;
-        }
-
-        workingContext.resolved.add(courseId);
-        return {
-            ok: true,
-            context: workingContext
-        };
-    }
-
-    private resolveRequirement(
-        requirement: RequirementNode,
-        context: ResolutionContext,
-        path: string[],
-        overrides: Set<string>
-    ): ResolutionResult {
-        const failures: ResolutionFailure[] = [];
-        const orderedOptions = this.orderRequirementOptions(requirement.options, context);
-
-        for (const optionId of orderedOptions) {
-            if (!this.courseMap.has(optionId)) {
-                failures.push({
-                    type: "missing_reference",
-                    sourceCourseId: requirement.courseId,
-                    requirement,
-                    targetCourseId: optionId,
-                    path: [...path, optionId]
-                });
-                continue;
-            }
-
-            const branchContext = this.cloneContext(context);
-            const branchResult = this.resolveCourse(optionId, branchContext, path, overrides);
-            if (branchResult.ok) {
-                const continuationFailure = this.findContinuationConflict(branchResult.context.closure);
-                if (continuationFailure) {
-                    failures.push(continuationFailure);
-                    continue;
-                }
-
-                return branchResult;
-            }
-
-            if (branchResult.failure) {
-                failures.push(branchResult.failure);
-            }
-        }
-
-        return {
-            ok: false,
-            context,
-            failure: {
-                type: "dead_end",
-                sourceCourseId: requirement.courseId,
-                requirement,
-                path,
-                causes: failures
-            }
-        };
     }
 
     private orderRequirementOptions(options: string[], context: ResolutionContext): string[] {
@@ -600,49 +402,17 @@ export class CatalogSolver {
 
     private describeFailure(failure: ResolutionFailure | undefined, focusCourseId: string): string | undefined {
         if (!failure) return undefined;
-
         switch (failure.type) {
-            case "group_conflict": {
-                const targetName = this.getCourseName(failure.targetCourseId || failure.sourceCourseId);
-                const blockerName = this.getCourseName(failure.blockerCourseId);
-                return `${targetName} conflicts with ${blockerName} in the same department-year slot.`;
-            }
-            case "missing_reference":
-                return `Catalog rule references missing course ${failure.targetCourseId || focusCourseId}.`;
-            case "cycle": {
-                const cyclePath = failure.path?.map(id => this.getCourseName(id)).join(" -> ");
-                return cyclePath
-                    ? `Catalog rule loops through ${cyclePath}.`
-                    : `Catalog rule contains a dependency cycle around ${this.getCourseName(focusCourseId)}.`;
-            }
+            case "group_conflict": return `This course requires ${this.getCourseName(failure.targetCourseId || failure.sourceCourseId)}, but ${this.getCourseName(failure.blockerCourseId)} is selected`;
+            case "missing_reference": return `Catalog rule references missing course ${failure.targetCourseId || focusCourseId}.`;
+            case "cycle": return `Catalog rule contains a dependency cycle around ${this.getCourseName(focusCourseId)}.`;
             case "dead_end": {
-                const nestedReason = failure.causes
-                    ?.map(cause => this.describeFailure(cause, focusCourseId))
-                    .find((message): message is string => Boolean(message));
-
+                const nestedReason = failure.causes?.map(cause => this.describeFailure(cause, focusCourseId)).find(Boolean);
                 if (nestedReason) return nestedReason;
-
-                if (failure.requirement) {
-                    const options = failure.requirement.options.map(id => this.getCourseName(id)).join(" or ");
-                    const label = failure.requirement.kind === "current" ? "Concurrent path" : "Prerequisite path";
-                    return `${label} cannot be satisfied through ${options}.`;
-                }
-
+                if (failure.requirement) return `${failure.requirement.kind === "current" ? "Concurrent path" : "Prerequisite path"} cannot be satisfied.`;
                 return `No valid rule path remains for ${this.getCourseName(focusCourseId)}.`;
             }
-            case "track_lock": {
-                const sourceName = this.getCourseName(failure.sourceCourseId);
-                const blockedName = this.getCourseName(failure.targetCourseId || focusCourseId);
-                const allowedNames = failure.continuationTargets
-                    ?.map(id => this.getCourseName(id))
-                    .join(" or ");
-
-                if (allowedNames) {
-                    return `Selecting ${sourceName} reserves ${allowedNames} for the next grade, so ${blockedName} is unavailable.`;
-                }
-
-                return `Selecting ${sourceName} locks the next-grade path, so ${blockedName} is unavailable.`;
-            }
+            case "track_lock": return `Selecting ${this.getCourseName(failure.sourceCourseId)} locks the next-grade path, preventing ${this.getCourseName(failure.targetCourseId || focusCourseId)}.`;
         }
     }
 
@@ -655,50 +425,22 @@ export class CatalogSolver {
         return this.courseMap.get(courseId)?.conflictGroupId;
     }
 
-    private projectSelectionForCourse(
-        courseId: string,
-        effectiveState: EffectiveSelectionState
-    ): { selection: Set<string>; overrides: Set<string> } {
-        const selection = new Set(effectiveState.selection);
-        const overrides = new Set(effectiveState.overrides);
-        const targetGroupId = this.getConflictGroupId(courseId);
-
-        if (targetGroupId) {
-            for (const selectedId of selection) {
-                if (selectedId === courseId) continue;
-                if (this.getConflictGroupId(selectedId) !== targetGroupId) continue;
-
-                selection.delete(selectedId);
-                overrides.delete(selectedId);
-            }
-        }
-
-        selection.add(courseId);
-        return { selection, overrides };
-    }
-
     private makeCacheKey(courseId: string): string {
-        const selected = [...this.selectedCourses].sort().join("|");
-        const moveUps = [...this.activeMoveUps].sort().join("|");
-        return `${courseId}::${selected}::${moveUps}`;
+        const moves = Array.from(this.moveUps.entries()).map(([k, v]) => `${k}>${v}`).sort().join("|");
+        return `${courseId}::${[...this.selectedCourses].sort().join("|")}::${moves}`;
     }
 
     private getNextGrade(grade: string): string | undefined {
         const parsedGrade = Number.parseInt(grade, 10);
-        if (!Number.isFinite(parsedGrade)) return undefined;
-        return String(parsedGrade + 1);
+        return Number.isFinite(parsedGrade) ? String(parsedGrade + 1) : undefined;
     }
 
     private cloneContext(context: ResolutionContext): ResolutionContext {
-        return {
-            closure: new Set(context.closure),
-            occupancy: new Map(context.occupancy),
-            resolved: new Set(context.resolved)
-        };
+        return { closure: new Set(context.closure), occupancy: new Map(context.occupancy), resolved: new Set(context.resolved) };
     }
 
-    private getMissingRequirements(dnf: string[][] | undefined, userState: Set<string>): string[][] {
+    private getMissingRequirements(dnf: string[][] | undefined, targets: Set<string>): string[][] {
         if (!dnf) return [];
-        return dnf.filter(orBlock => !orBlock.some(id => userState.has(id)));
+        return dnf.filter(orBlock => !orBlock.some(id => targets.has(id)));
     }
 }

@@ -1,7 +1,9 @@
 <template>
   <div
     class="min-h-screen bg-[#F2F2F7] dark:bg-[#1C1C1E] text-[#1C1C1E] dark:text-[#F2F2F7] p-4 md:p-8 font-sans transition-colors duration-300 relative overflow-hidden flex flex-col antialiased selection:bg-cyan-500/30"
+    @mousemove="updateMousePosition"
   >
+    <!-- Header -->
     <header class="flex flex-wrap justify-between items-center gap-6 mb-8 relative z-10 shrink-0 max-w-[1400px] mx-auto w-full">
       <div class="flex flex-col">
         <h1 class="text-3xl md:text-4xl font-bold tracking-tight text-black dark:text-white">
@@ -82,7 +84,7 @@
               vector-effect="non-scaling-stroke"
               :stroke-dasharray="path.variant === 'dashed' ? '7 7' : undefined"
               :class="path.variant === 'dashed'
-                ? 'stroke-[2.5] stroke-[#F59E0B] dark:stroke-[#FBBF24]'
+                ? 'stroke-[2.5] stroke-orange-500 dark:stroke-orange-500'
                 : 'stroke-[2.25] stroke-[#3B82F6]/70 dark:stroke-[#60A5FA]/65'"
             />
           </svg>
@@ -108,10 +110,7 @@
                 v-if="getCollapsedSummary(dept, grade)"
                 type="button"
                 @click="openCourseInfo(getCollapsedSummary(dept, grade)!.id)"
-                :class="[
-                  'w-full min-h-[74px] rounded-2xl border px-3 py-3 text-left transition-colors shadow-sm',
-                  getSummaryStyles(getCollapsedSummary(dept, grade)!.id)
-                ]"
+                :class="[uiConfig.summaryBase, getSummaryStyles(getCollapsedSummary(dept, grade)!.id)]"
               >
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
@@ -121,7 +120,7 @@
                   </div>
                   <div class="pt-0.5 shrink-0">
                     <svg v-if="viewState[getCollapsedSummary(dept, grade)!.id]?.status === 'locked'" class="h-4 w-4 opacity-75" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                    <svg v-else-if="viewState[getCollapsedSummary(dept, grade)!.id]?.status === 'moveUpPreview'" class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17L17 7m0 0H9m8 0v8"></path></svg>
+                    <svg v-else-if="viewState[getCollapsedSummary(dept, grade)!.id]?.status === 'moveUpTarget'" class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17L17 7m0 0H9m8 0v8"></path></svg>
                     <svg v-else class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                   </div>
                 </div>
@@ -133,23 +132,21 @@
 
             <!-- Expanded Content -->
             <div v-else class="flex flex-col gap-2.5 h-full">
-              <div v-for="course in getCourses(dept, grade)" :key="course.id" class="relative">
+              <div v-for="course in getCourses(dept, grade)" :key="course.id" class="relative group"
+                   @mouseenter="showTooltip(viewState[course.id]?.status === 'locked' && viewState[course.id]?.lockReason ? viewState[course.id]?.lockReason || '' : '')"
+                   @mouseleave="hideTooltip"
+              >
                 <button
                   :ref="el => setCourseCardRef(course.id, el as Element | null)"
                   type="button"
-                  @click="toggleCourseSelection(course.id)"
-                  :disabled="!canToggleCourse(course.id)"
-                  :aria-pressed="isCourseSelected(course.id)"
+                  @click="handleCourseClick(course.id)"
                   :class="[
-                    'w-full min-h-[78px] text-left px-3 py-3 pr-11 rounded-2xl relative overflow-hidden border transition-transform duration-150 active:scale-[0.985] disabled:active:scale-100 flex flex-col justify-between gap-2',
+                    uiConfig.cardBase,
                     getCardStyles(course.id)
                   ]"
                 >
                   <div class="pr-2">
                     <h3 class="font-bold text-[13px] leading-snug">{{ viewState[course.id]?.name || course.raw.name }}</h3>
-                    <p v-if="viewState[course.id]?.status === 'moveUpPreview' && viewState[course.id]?.moveUpLineageIds?.length" class="mt-1 text-[11px] font-medium opacity-75">
-                      via {{ getMoveUpLineageLabel(course.id) }}
-                    </p>
                   </div>
 
                   <!-- Rating Bar (Monochrome) -->
@@ -164,7 +161,7 @@
                     type="button"
                     @click.stop="openCourseInfo(course.id)"
                     :class="[
-                      'inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors',
+                      uiConfig.iconBtn,
                       viewState[course.id]?.isSelected
                         ? 'bg-white border-transparent text-blue-600 hover:bg-blue-50'
                         : 'border-black/10 dark:border-white/10 bg-white/92 dark:bg-white/10 text-slate-700 dark:text-white/85 hover:bg-white dark:hover:bg-white/20'
@@ -174,27 +171,24 @@
                   </button>
 
                   <button
-                    v-if="getCardAction(course.id)"
+                    v-if="moveUpState.active && moveUpState.sourceId === course.id"
                     type="button"
-                    @click.stop="handleCardIconTap(course.id)"
-                    @mouseenter="showTooltip(getCardAction(course.id)!.tooltip, $event)"
-                    @mousemove="moveTooltip($event)"
+                    @click.stop="cancelMoveUpMode"
+                    @mouseenter="showTooltip('Cancel move-up selection')"
                     @mouseleave="hideTooltip"
-                    :class="[
-                      'inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors',
-                      getCardAction(course.id)!.type === 'moveUp'
-                        ? (viewState[course.id]?.isMoveUpSource
-                            ? 'bg-[#FF9500] border-transparent text-white'
-                            : (viewState[course.id]?.isSelected
-                                ? 'bg-white border-transparent text-[#FF9500]'
-                                : 'bg-white dark:bg-white/10 border-[#FF9500]/30 text-[#FF9500] dark:text-[#FFB340]'))
-                        : (viewState[course.id]?.isSelected
-                            ? 'bg-white border-transparent text-amber-600'
-                            : 'bg-white dark:bg-white/10 border-amber-300/40 text-amber-600 dark:text-amber-400')
-                    ]"
+                    class="inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors bg-red-500 border-red-500 text-white hover:bg-red-600 opacity-100"
                   >
-                    <svg v-if="getCardAction(course.id)!.type === 'moveUp'" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 17L17 7m0 0H9m8 0v8"></path></svg>
-                    <svg v-else class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.75a1.5 1.5 0 011.299.75l7.5 13A1.5 1.5 0 0119.5 19.75h-15a1.5 1.5 0 01-1.299-2.25l7.5-13A1.5 1.5 0 0112 3.75zm0 4.5a.75.75 0 00-.75.75v4.5a.75.75 0 001.5 0V9a.75.75 0 00-.75-.75zm0 8a1 1 0 100-2 1 1 0 000 2z" /></svg>
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                  </button>
+                  <button
+                    v-else-if="!moveUpState.active && viewState[course.id]?.isSelected && viewState[course.id]?.moveUpAvailable && !viewState[course.id]?.isMoveUpSource"
+                    type="button"
+                    @click.stop="startMoveUp(course.id)"
+                    @mouseenter="showTooltip('Select a course to move up to')"
+                    @mouseleave="hideTooltip"
+                    class="inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors bg-white dark:bg-white/10 border-orange-500/40 text-orange-500 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-500/20 opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 17L17 7m0 0H9m8 0v8"></path></svg>
                   </button>
                 </div>
               </div>
@@ -218,18 +212,21 @@
           <h2 class="flex-1 text-3xl font-bold tracking-tight text-black dark:text-white">{{ activeVm?.name || activeRaw?.raw.name }}</h2>
           <button
             v-if="viewingCourseId && activeVm"
-            @click="toggleCourseSelection(viewingCourseId)"
-            :disabled="!canToggleCourse(viewingCourseId)"
+            @click="handleCourseClick(viewingCourseId)"
+            :disabled="activeVm.isMoveUpTarget"
             :class="[
               'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-all duration-200 active:scale-95',
-              canToggleCourse(viewingCourseId) ? (activeVm.isSelected ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-500') : 'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-400 cursor-not-allowed'
+              activeVm.isMoveUpTarget ? 'bg-orange-500 border-orange-500 text-white cursor-not-allowed opacity-80' : 
+              activeVm.isSelected ? 'bg-blue-500 border-blue-500 text-white' : 
+              activeVm.status === 'available' ? 'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-500 hover:bg-white dark:hover:bg-white/20 hover:text-black dark:hover:text-white' :
+              'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-400 cursor-not-allowed'
             ]"
           >
             <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
           </button>
         </div>
 
-        <!-- Rating Section (Detailed, Green) -->
+        <!-- Rating Section -->
         <div class="mb-6 rounded-[1.5rem] border border-black/5 dark:border-white/5 p-5 bg-white/50 dark:bg-white/5">
           <div class="flex justify-between items-end mb-4">
             <div>
@@ -244,25 +241,33 @@
           </div>
         </div>
 
-        <!-- Move-up Action Center -->
-        <div v-if="activeVm?.moveUpAvailable" class="mb-8">
-          <button
-            @click="toggleMoveUpForCourse(viewingCourseId!)"
-            class="w-full py-4 px-6 rounded-2xl border flex items-center justify-between transition-all duration-200 group"
-            :class="activeVm.isMoveUpSource
-              ? 'bg-[#FF9500] border-[#FF9500] text-white shadow-lg shadow-orange-500/20'
-              : 'bg-[#FF9500]/10 border-[#FF9500]/30 text-[#D96D00] dark:text-[#FFB340] hover:bg-[#FF9500]/20'
-            "
-          >
+        <!-- Move-up Banner (If this is the target of a move-up) -->
+        <div v-if="activeVm?.isMoveUpTarget" class="mb-8">
+          <div class="w-full py-4 px-6 rounded-2xl border flex items-center justify-between transition-all duration-200 bg-orange-500/10 border-orange-500/30 text-orange-600 dark:text-orange-400">
             <div class="text-left">
               <div class="text-[10px] font-bold uppercase tracking-widest opacity-80">Accelerated path</div>
-              <div class="font-bold text-sm">Moved up to {{ getMoveUpTargetName(viewingCourseId!) }}</div>
+              <div class="font-bold text-sm">Moved up from {{ getCourseName(activeVm.moveUpSourceId) }}</div>
             </div>
-            <svg class="w-5 h-5 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path v-if="activeVm.isMoveUpSource" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
-              <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 17L17 7m0 0H9m8 0v8" />
+            <svg class="w-5 h-5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 17L17 7m0 0H9m8 0v8" />
             </svg>
-          </button>
+          </div>
+        </div>
+
+        <!-- Move-up Action Center (If this course has been moved up from) -->
+        <div v-else-if="activeVm?.isMoveUpSource" class="mb-8">
+          <div class="w-full py-4 px-6 rounded-2xl border flex items-center justify-between transition-all duration-200 bg-orange-50 border-orange-200 dark:bg-orange-500/10 dark:border-orange-500/30 text-orange-700 dark:text-orange-400">
+            <div class="text-left">
+              <div class="text-[10px] font-bold uppercase tracking-widest opacity-80">Accelerated path</div>
+              <div class="font-bold text-sm">Moved up to {{ getCourseName(activeVm.moveUpTargetId) }}</div>
+            </div>
+            <button
+              @click="removeMoveUp(viewingCourseId!)"
+              class="px-3 py-1.5 rounded-lg bg-orange-500 text-white text-xs font-bold hover:bg-orange-600 transition-colors shadow-sm"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
 
         <!-- Descriptions -->
@@ -285,7 +290,18 @@
     </footer>
 
     <Transition name="fade"><div v-if="viewingCourseId" @click="viewingCourseId = null" class="fixed inset-0 bg-black/20 dark:bg-black/50 backdrop-blur-sm z-[55] cursor-pointer"></div></Transition>
-    <Transition name="tooltip-pop"><div v-if="tooltip.visible" class="fixed z-[80] pointer-events-none px-3 py-2 rounded-xl text-xs font-medium shadow-xl max-w-[280px]" :class="tooltipThemeClass" :style="tooltipStyle">{{ tooltip.text }}</div></Transition>
+    
+    <!-- Unified Tooltip Renderer -->
+    <Transition name="tooltip-pop">
+      <div 
+        v-if="activeTooltip.visible" 
+        class="fixed z-[100] pointer-events-none text-xs" 
+        :class="tooltipThemeClass" 
+        :style="tooltipStyle"
+      >
+        {{ activeTooltip.text }}
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -306,8 +322,16 @@ interface ArrowPath {
 }
 
 interface TooltipState {
-  visible: boolean; text: string; x: number; y: number; placement: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left';
+  visible: boolean;
+  text: string;
+  theme?: 'default' | 'move-up';
 }
+
+const uiConfig = {
+  cardBase: 'w-full min-h-[78px] text-left px-3 py-3 pr-11 rounded-2xl relative overflow-hidden border transition-all duration-200 flex flex-col justify-between gap-2',
+  summaryBase: 'w-full min-h-[74px] rounded-2xl border px-3 py-3 text-left transition-colors shadow-sm',
+  iconBtn: 'inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-all duration-200 opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100'
+};
 
 const catalogData = ref<CourseModel | null>(null);
 const viewState = ref<Record<string, CourseViewModel>>({});
@@ -317,8 +341,16 @@ const viewingCourseId = ref<string | null>(null);
 const isDarkMode = ref<boolean>(false);
 const searchQuery = ref<string>('');
 const collapsedDepts = ref<Set<string>>(new Set());
-const tooltip = ref<TooltipState>({ visible: false, text: '', x: 0, y: 0, placement: 'top-right' });
+const tooltip = ref<TooltipState>({ visible: false, text: '', theme: 'default' });
 const deptArrowPaths = ref<Record<string, ArrowPath[]>>({});
+
+const mouseX = ref(0);
+const mouseY = ref(0);
+const moveUpState = ref<{
+  active: boolean;
+  sourceId: string | null;
+  validTargets: string[];
+}>({ active: false, sourceId: null, validTargets: [] });
 
 const matrixRef = ref<HTMLElement | null>(null);
 const deptRowRefs = new Map<string, HTMLElement>();
@@ -329,7 +361,15 @@ let arrowFrame = 0;
 let resizeObserver: ResizeObserver | null = null;
 
 const handleEscape = (event: KeyboardEvent) => {
-  if (event.key === 'Escape' && viewingCourseId.value) viewingCourseId.value = null;
+  if (event.key === 'Escape') {
+    if (moveUpState.value.active) cancelMoveUpMode();
+    else if (viewingCourseId.value) viewingCourseId.value = null;
+  }
+};
+
+const updateMousePosition = (e: MouseEvent) => {
+  mouseX.value = e.clientX;
+  mouseY.value = e.clientY;
 };
 
 const grades = computed<string[]>(() => catalogData.value?.grades || []);
@@ -338,7 +378,6 @@ const allCourses = computed<CourseMeta[]>(() => {
   if (!catalogData.value) return [];
   const list: CourseMeta[] = [];
   for (const [dept, gradesObj] of Object.entries(catalogData.value.departments)) {
-    if (dept === 'residuals') continue;
     const typedGradesObj = gradesObj as Record<string, CourseNode[]>;
     for (const [gradeLevel, courseArray] of Object.entries(typedGradesObj)) {
       if (!courseArray) continue;
@@ -400,118 +439,185 @@ const toggleDept = (dept: string) => {
 
 const openCourseInfo = (courseId: string) => viewingCourseId.value = courseId;
 
-const canToggleCourse = (courseId: string): boolean => {
-  const vm = viewState.value[courseId];
-  return Boolean(vm && (vm.isSelected || vm.status === 'available'));
+// Move Up UI Logic
+const startMoveUp = (courseId: string) => {
+  if (!controller.value) return;
+  const targets = controller.value.getValidMoveUpTargets(courseId);
+  if (targets.length > 0) {
+    moveUpState.value = { active: true, sourceId: courseId, validTargets: targets };
+  }
 };
 
-const isCourseSelected = (courseId: string): boolean => Boolean(viewState.value[courseId]?.isSelected);
-const toggleCourseSelection = (courseId: string) => {
-  if (!canToggleCourse(courseId)) return;
+const cancelMoveUpMode = () => {
+  moveUpState.value = { active: false, sourceId: null, validTargets: [] };
+};
+
+const executeMoveUp = (targetId: string) => {
+  if (moveUpState.value.sourceId) {
+    controller.value?.setExplicitMoveUp(moveUpState.value.sourceId, targetId);
+    cancelMoveUpMode();
+  }
+};
+
+const removeMoveUp = (sourceId: string) => {
+  controller.value?.removeExplicitMoveUp(sourceId);
+};
+
+const handleCourseClick = (courseId: string) => {
+  if (moveUpState.value.active) {
+    if (moveUpState.value.validTargets.includes(courseId)) {
+      executeMoveUp(courseId);
+    } else if (courseId === moveUpState.value.sourceId) {
+      cancelMoveUpMode();
+    }
+    return;
+  }
+
+  const vm = viewState.value[courseId];
+  if (vm?.isMoveUpTarget) {
+    openCourseInfo(courseId);
+    return;
+  }
+
   controller.value?.handleTap(courseId);
 };
-const toggleMoveUpForCourse = (courseId: string) => controller.value?.handleMoveUpTap(courseId);
 
-const getMoveUpTargetName = (courseId: string): string => {
-  const targetId = viewState.value[courseId]?.moveUpTargetId;
-  if (!targetId) return 'Next Level';
-  return viewState.value[targetId]?.name || courseMetaById.value.get(targetId)?.raw.name || 'Next Level';
+const getCourseName = (courseId?: string): string => {
+  if (!courseId) return 'Unknown';
+  return viewState.value[courseId]?.name || courseMetaById.value.get(courseId)?.raw.name || courseId;
 };
 
-const getCardAction = (courseId: string) => {
-  const vm = viewState.value[courseId];
-  if (!vm) return null;
-  if (vm.status !== 'locked' && vm.moveUpAvailable) {
-    const targetName = getMoveUpTargetName(courseId);
-    return { 
-      type: 'moveUp' as const, 
-      tooltip: vm.isMoveUpSource ? `Moved up to: ${targetName}` : `Move up to: ${targetName}` 
+// --- Unified Tooltip Logic (Refactored) ---
+const activeTooltip = computed<TooltipState>(() => {
+  // Prioritize the move-up cursor tooltip
+  if (moveUpState.value.active && moveUpState.value.sourceId) {
+    const sourceName = courseMetaById.value.get(moveUpState.value.sourceId)?.raw.name || '';
+    return {
+      visible: true,
+      text: `Select course to move-up to from ${sourceName}`,
+      theme: 'move-up',
     };
   }
-  if (vm.status !== 'locked') return null;
-  if (vm.lockReason) return { type: 'warning' as const, tooltip: vm.lockReason };
-  return null;
+  // Fall back to the standard hover tooltip
+  return {
+    ...tooltip.value,
+    theme: 'default',
+  };
+});
+
+const showTooltip = (text: string) => {
+  if (!text) return; // Don't show tooltips for empty text
+  tooltip.value = { visible: true, text };
 };
 
-const handleCardIconTap = (courseId: string) => {
-  const icon = getCardAction(courseId);
-  if (icon?.type === 'moveUp') toggleMoveUpForCourse(courseId);
-};
+const hideTooltip = () => { tooltip.value.visible = false; };
 
-const positionTooltip = (x: number, y: number) => {
-  const gap = 12; const width = 280; const height = 96; const margin = 16;
-  const placeLeft = x + gap + width > window.innerWidth - margin;
-  const placeAbove = y + gap + height > window.innerHeight - margin;
-  let placement: TooltipState['placement'] = 'top-right';
-  if (placeAbove && placeLeft) placement = 'bottom-left'; else if (placeAbove) placement = 'bottom-right'; else if (placeLeft) placement = 'top-left';
-  return { left: placeLeft ? x - width - gap : x + gap, top: placeAbove ? y - height - gap : y + gap, placement };
-};
+const tooltipStyle = computed(() => {
+  const gap = 15;
+  const tooltipElWidth = activeTooltip.value.theme === 'move-up' ? 350 : 280;
+  const tooltipElHeight = 96; // Generous height for positioning calculation
+  const margin = 16;
+  
+  const x = mouseX.value;
+  const y = mouseY.value;
 
-const showTooltip = (text: string, event: MouseEvent) => {
-  const positioned = positionTooltip(event.clientX, event.clientY);
-  tooltip.value = { visible: true, text, x: positioned.left, y: positioned.top, placement: positioned.placement };
-};
+  const placeLeft = x + gap + tooltipElWidth > window.innerWidth - margin;
+  const placeAbove = y + gap + tooltipElHeight > window.innerHeight - margin;
 
-const moveTooltip = (event: MouseEvent) => {
-  if (!tooltip.value.visible) return;
-  const positioned = positionTooltip(event.clientX, event.clientY);
-  tooltip.value = { ...tooltip.value, x: positioned.left, y: positioned.top, placement: positioned.placement };
-};
+  const left = placeLeft ? x - tooltipElWidth - gap : x + gap;
+  const top = placeAbove ? y - tooltipElHeight - gap : y + gap;
 
-const hideTooltip = () => tooltip.value.visible = false;
+  return { left: `${left}px`, top: `${top}px` };
+});
 
-const tooltipStyle = computed(() => ({ left: `${tooltip.value.x}px`, top: `${tooltip.value.y}px`, transform: 'none' }));
-const tooltipThemeClass = computed(() => isDarkMode.value ? 'bg-[#2C2C2E]/90 text-white border border-white/10 shadow-2xl' : 'bg-white text-slate-900 border border-black/10 shadow-xl');
+const tooltipThemeClass = computed(() => {
+  if (activeTooltip.value.theme === 'move-up') {
+    return 'bg-orange-500/90 backdrop-blur-md text-white font-bold rounded-full shadow-xl border border-white/20 dark:border-black/20 px-3.5 py-2';
+  }
+  
+  // Default theme
+  const baseClasses = 'font-medium shadow-xl max-w-[280px] rounded-xl px-3 py-2';
+  return isDarkMode.value 
+    ? `${baseClasses} bg-[#2C2C2E]/90 text-white border border-white/10 shadow-2xl` 
+    : `${baseClasses} bg-white text-slate-900 border border-black/10 shadow-xl`;
+});
+
 
 const formatRating = (val: number | undefined) => {
   if (val === undefined) return '0.00';
   return val.toFixed(2);
 };
 
-const getMoveUpLineageLabel = (courseId: string) => {
-  const lineage = viewState.value[courseId]?.moveUpLineageIds || [];
-  if (lineage.length === 0) return courseMetaById.value.get(courseId)?.raw.name || courseId;
-  return [...lineage, courseId].map(id => viewState.value[id]?.name || id).join(' → ');
-};
-
 const getCardStyles = (courseId: string): string => {
-  const vm = viewState.value[courseId];
   const isViewing = viewingCourseId.value === courseId;
-  const viewingRing = isViewing ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-[#1C1C1E] ' : '';
-  if (!vm) return viewingRing + 'bg-white/50 dark:bg-[#2C2C2E]/50 border-black/5 text-gray-500';
-  if (vm.status === 'moveUpPreview') return viewingRing + 'bg-[#FFFBF2] dark:bg-[#3A2A10]/45 border-[#F59E0B]/45 text-[#8A5100] dark:text-[#FFD18A]';
-  if (vm.status === 'selected') return viewingRing + 'bg-blue-500 border-blue-500 text-white shadow-sm hover:bg-blue-600' + (vm.isMoveUpSource ? ' ring-1 ring-[#FF9500]/40' : '');
-  if (vm.status === 'available') return viewingRing + 'bg-white/75 dark:bg-[#2C2C2E]/75 border-black/5 dark:border-white/10 text-black dark:text-white hover:bg-white dark:hover:bg-[#3A3A3C] shadow-sm';
-  return viewingRing + 'bg-gray-100/65 dark:bg-white/5 border-black/5 text-gray-500 dark:text-gray-400';
+  const baseRing = isViewing ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-[#1C1C1E] ' : '';
+
+  if (moveUpState.value.active) {
+    if (courseId === moveUpState.value.sourceId) {
+      return baseRing + 'bg-red-50/80 border-2 border-red-500 text-red-700 dark:bg-red-500/20 dark:text-red-300 transition-all cursor-pointer';
+    }
+    if (moveUpState.value.validTargets.includes(courseId)) {
+      return baseRing + 'bg-orange-50 border-2 border-dashed border-orange-500 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400 cursor-pointer animate-[pulse_2s_ease-in-out_infinite] hover:scale-[1.02] hover:bg-orange-100 dark:hover:bg-orange-500/30 transition-all';
+    }
+    return baseRing + 'bg-transparent border-black/5 dark:border-white/5 opacity-30 grayscale cursor-not-allowed pointer-events-none';
+  }
+  
+  const vm = viewState.value[courseId];
+  if (!vm || vm.status === 'locked') return baseRing + 'bg-transparent border border-black/10 dark:border-white/10 text-gray-400 dark:text-gray-500 opacity-60';
+  
+  if (vm.isMoveUpSource) return baseRing + 'bg-transparent border-2 border-solid border-orange-400 text-gray-600 dark:text-gray-300 font-medium opacity-85 active:scale-[0.985]';
+  if (vm.isMoveUpTarget) return baseRing + 'bg-orange-500 border-orange-500 text-white shadow-md font-semibold dark:bg-orange-600 active:scale-[0.985]';
+  if (vm.status === 'selected') return baseRing + 'bg-blue-500 border-blue-500 text-white shadow-sm hover:bg-blue-600 active:scale-[0.985]';
+  if (vm.status === 'available') return baseRing + 'bg-white/75 dark:bg-[#2C2C2E]/75 border-black/5 dark:border-white/10 text-black dark:text-white hover:bg-white dark:hover:bg-[#3A3A3C] shadow-sm active:scale-[0.985]';
+  
+  return baseRing + 'bg-transparent border border-black/10 dark:border-white/10 text-gray-400 dark:text-gray-500 opacity-60';
 };
 
 const getSummaryStyles = (courseId: string): string => {
   const vm = viewState.value[courseId];
-  if (!vm) return 'bg-white/55 dark:bg-white/[0.04] text-gray-500';
-  if (vm.status === 'moveUpPreview') return 'bg-[#FFFBF2] dark:bg-[#3A2A10]/45 border-[#F59E0B]/45 text-[#8A5100] dark:text-[#FFD18A]';
+  if (!vm || vm.status === 'locked') return 'bg-transparent border border-black/10 dark:border-white/10 text-gray-400 dark:text-gray-500 opacity-60';
+  if (vm.isMoveUpSource) return 'bg-transparent border-2 border-solid border-orange-400 text-gray-600 dark:text-gray-300 font-medium opacity-85';
+  if (vm.isMoveUpTarget) return 'bg-orange-500 border-orange-500 text-white shadow-sm font-semibold dark:bg-orange-600';
   if (vm.status === 'selected') return 'bg-blue-500 border-blue-500 text-white';
   return 'bg-white/80 dark:bg-[#2C2C2E]/75 border-black/5 text-black dark:text-white';
 };
 
+const getGradeEntryPoint = (dept: string, grade: string): string | null => {
+  const bucket = getAllBucketCourses(dept, grade);
+  const activeCourses = bucket.filter(c => {
+    const st = viewState.value[c.id]?.status;
+    return st === 'selected' || st === 'moveUpTarget';
+  });
+  if (!activeCourses.length) return null;
+
+  const entry = activeCourses.find(c => {
+    const sourceId = viewState.value[c.id]?.moveUpSourceId;
+    if (!sourceId) return true;
+    return courseMetaById.value.get(sourceId)?.grade !== grade;
+  });
+  return entry ? entry.id : activeCourses[0].id;
+};
+
+const getGradeExitPoint = (dept: string, grade: string): string | null => {
+  const bucket = getAllBucketCourses(dept, grade);
+  const activeCourses = bucket.filter(c => {
+    const st = viewState.value[c.id]?.status;
+    return st === 'selected' || st === 'moveUpTarget';
+  });
+  if (!activeCourses.length) return null;
+
+  const exit = activeCourses.find(c => {
+    if (!viewState.value[c.id]?.isMoveUpSource) return true;
+    const targetId = viewState.value[c.id]?.moveUpTargetId;
+    if (!targetId) return true;
+    return courseMetaById.value.get(targetId)?.grade !== grade;
+  });
+  return exit ? exit.id : activeCourses[activeCourses.length - 1].id;
+};
+
 const getCollapsedSummary = (dept: string, grade: string) => {
-  const bucket = getAllBucketCourses(dept, grade);
-  const moveUpPreview = bucket.find(course => viewState.value[course.id]?.status === 'moveUpPreview');
-  if (moveUpPreview) return moveUpPreview;
-  const selected = bucket.find(course => viewState.value[course.id]?.isSelected);
-  if (selected) return selected;
-  return null;
-};
-
-const getIncomingAnchorId = (dept: string, grade: string) => {
-  const bucket = getAllBucketCourses(dept, grade);
-  const selected = bucket.find(course => viewState.value[course.id]?.status === 'selected');
-  return selected ? selected.id : (bucket.find(course => viewState.value[course.id]?.status === 'moveUpPreview')?.id || null);
-};
-
-const getOutgoingAnchorId = (dept: string, grade: string) => {
-  const bucket = getAllBucketCourses(dept, grade);
-  const moveUp = bucket.find(course => viewState.value[course.id]?.status === 'moveUpPreview');
-  return moveUp ? moveUp.id : (bucket.find(course => viewState.value[course.id]?.status === 'selected')?.id || null);
+  const id = getGradeExitPoint(dept, grade);
+  return id ? courseMetaById.value.get(id) || null : null;
 };
 
 const setDeptRowRef = (dept: string, el: Element | null) => { if (el instanceof HTMLElement) deptRowRefs.set(dept, el); else deptRowRefs.delete(dept); scheduleArrowRefresh(); };
@@ -541,12 +647,26 @@ const makeMoveUpPath = (rowEl: HTMLElement, startEl: HTMLElement, endEl: HTMLEle
   const rowRect = rowEl.getBoundingClientRect();
   const s = startEl.getBoundingClientRect();
   const e = endEl.getBoundingClientRect();
-  const isBelow = e.top > s.top;
-  const sx = (s.left + s.right) / 2 - rowRect.left;
-  const sy = isBelow ? s.bottom - rowRect.top - 8 : s.top - rowRect.top + 8;
-  const ex = (e.left + e.right) / 2 - rowRect.left;
-  const ey = isBelow ? e.top - rowRect.top - 8 : e.bottom - rowRect.top + 8;
-  return `M ${sx} ${sy} L ${ex} ${ey}`;
+  
+  const isSameCol = Math.abs(s.left - e.left) < 50;
+
+  if (isSameCol) {
+    const startIsAbove = s.top < e.top;
+    const sx = (s.left + s.right) / 2 - rowRect.left;
+    const sy = (startIsAbove ? s.bottom : s.top) - rowRect.top;
+    const ex = (e.left + e.right) / 2 - rowRect.left;
+    const ey = (startIsAbove ? e.top : e.bottom) - rowRect.top;
+    
+    const ctrlOffsetY = (ey - sy) * 0.55; 
+    return `M ${sx},${sy} C ${sx},${sy + ctrlOffsetY} ${ex},${ey - ctrlOffsetY} ${ex},${ey}`;
+  } else {
+    const sx = s.right - rowRect.left;
+    const sy = (s.top + s.bottom) / 2 - rowRect.top;
+    const ex = e.left - rowRect.left;
+    const ey = (e.top + e.bottom) / 2 - rowRect.top;
+    const mx = sx + (ex - sx) / 2;
+    return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ey}, ${ex} ${ey}`;
+  }
 };
 
 const recomputeArrowPaths = () => {
@@ -555,21 +675,39 @@ const recomputeArrowPaths = () => {
   activeDepartments.value.forEach(dept => {
     const rowEl = deptRowRefs.get(dept); if (!rowEl) return;
     const paths: ArrowPath[] = [];
-    for (let i = 0; i < currentGrades.length - 1; i++) {
-      const startEl = getArrowAnchorEl(getOutgoingAnchorId(dept, currentGrades[i]!), dept, currentGrades[i]!);
-      const endEl = getArrowAnchorEl(getIncomingAnchorId(dept, currentGrades[i+1]!), dept, currentGrades[i+1]!);
-      if (startEl && endEl) paths.push({ key: `${dept}:${currentGrades[i]}:${currentGrades[i+1]}`, d: makeLanePath(rowEl, startEl, endEl), variant: 'solid' });
-    }
+    
     if (!collapsedDepts.value.has(dept)) {
-      currentGrades.forEach(g => {
-        const bucket = getAllBucketCourses(dept, g);
-        const previewCourse = bucket.find(c => viewState.value[c.id]?.status === 'moveUpPreview');
-        const sourceId = previewCourse ? viewState.value[previewCourse.id]?.moveUpSourceId : undefined;
-        if (previewCourse && sourceId) {
-          const sEl = courseCardRefs.get(sourceId); const tEl = courseCardRefs.get(previewCourse.id);
-          if (sEl && tEl) paths.push({ key: `${dept}:${g}:mu:${previewCourse.id}`, d: makeMoveUpPath(rowEl, sEl, tEl), variant: 'dashed' });
+      const explicitSources = Object.values(viewState.value).filter(v => v.isMoveUpSource && courseMetaById.value.get(v.id)?.dept === dept);
+      explicitSources.forEach(vm => {
+        if (!vm.moveUpTargetId) return;
+        const sEl = courseCardRefs.get(vm.id);
+        const tEl = courseCardRefs.get(vm.moveUpTargetId);
+        if (sEl && tEl) {
+          paths.push({ key: `moveup:${vm.id}:${vm.moveUpTargetId}`, d: makeMoveUpPath(rowEl, sEl, tEl), variant: 'dashed' });
         }
       });
+
+      for (let i = 0; i < currentGrades.length - 1; i++) {
+        const outId = getGradeExitPoint(dept, currentGrades[i]!);
+        const inId = getGradeEntryPoint(dept, currentGrades[i+1]!);
+        
+        if (outId && inId) {
+          const outVm = viewState.value[outId];
+          if (outVm?.isMoveUpSource && outVm.moveUpTargetId === inId) continue;
+
+          const startEl = getArrowAnchorEl(outId, dept, currentGrades[i]!);
+          const endEl = getArrowAnchorEl(inId, dept, currentGrades[i+1]!);
+          if (startEl && endEl) {
+            paths.push({ key: `lane:${dept}:${currentGrades[i]}:${currentGrades[i+1]}`, d: makeLanePath(rowEl, startEl, endEl), variant: 'solid' });
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < currentGrades.length - 1; i++) {
+        const startEl = getArrowAnchorEl(getGradeExitPoint(dept, currentGrades[i]!), dept, currentGrades[i]!);
+        const endEl = getArrowAnchorEl(getGradeEntryPoint(dept, currentGrades[i+1]!), dept, currentGrades[i+1]!);
+        if (startEl && endEl) paths.push({ key: `col:${dept}:${currentGrades[i]}:${currentGrades[i+1]}`, d: makeLanePath(rowEl, startEl, endEl), variant: 'solid' });
+      }
     }
     nextPaths[dept] = paths;
   });
@@ -593,6 +731,7 @@ onMounted(async () => {
     if (data) {
       catalogData.value = data; controller.value = new CourseSelectionController(data);
       controller.value.connectView(v => viewState.value = v);
+      collapsedDepts.value = new Set(Object.keys(data.departments));
       await nextTick();
       if (matrixRef.value && resizeObserver) resizeObserver.observe(matrixRef.value);
       scheduleArrowRefresh();
@@ -607,6 +746,8 @@ onBeforeUnmount(() => { cancelAnimationFrame(arrowFrame); resizeObserver?.discon
 .slide-sheet-enter-from, .slide-sheet-leave-to { transform: translateX(110%); opacity: 0; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.4s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+.tooltip-pop-enter-active, .tooltip-pop-leave-active { transition: all 0.2s ease; }
+.tooltip-pop-enter-from, .tooltip-pop-leave-to { opacity: 0; transform: scale(0.9); }
 .animate-fade-in-up { animation: fadeInUp 0.8s cubic-bezier(0.32, 0.72, 0, 1) forwards; }
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
 .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }

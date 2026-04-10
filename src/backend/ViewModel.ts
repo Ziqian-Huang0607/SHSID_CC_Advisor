@@ -1,28 +1,26 @@
 // ViewModel.ts
-// written by willuhd on Apr 8
-// - The view configuration describing exactly the visual state of the UI
-// - No backend logic
-// - Use this for frontend !!! And use Controller.ts to control it!
 
-export type CourseStatus = 'locked' | 'available' | 'selected' | 'moveUpPreview';
+export type CourseStatus = 'locked' | 'available' | 'selected' | 'moveUpTarget';
 
 export interface CourseViewModel {
     id: string;
     name: string;
     grade: string;
-    
-    // UI State
+
     status: CourseStatus;
     isSelected: boolean;
     isInvalidSelection: boolean;
+    
+    // Explicit Move-Up flags
     isMoveUpSource: boolean;
-    moveUpSourceId?: string;
-    moveUpTargetId?: string;
-    moveUpLineageIds?: string[];
-    moveUpAvailable?: boolean;
+    isMoveUpTarget: boolean;
+    
+    moveUpSourceId?: string; // If this is a target, who is the source
+    moveUpTargetId?: string; // If this is a source, who is the target
+    
+    moveUpAvailable?: boolean; // If it's possible to move up from this course
 
-    // Display Strings (Backend handles the formatting)
-    lockReason?: string;       // e.g., "Requires: Bio 9 Honors"
-    moveUpNote?: string;       // e.g., "Requires 95%+ on Bio 9 Final"
+    lockReason?: string;
+    moveUpNote?: string;
     crowdRating: number;
 }
