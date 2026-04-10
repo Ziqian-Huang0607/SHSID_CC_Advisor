@@ -2,7 +2,7 @@
 
 An interactive course selection tool for SHSID students, built by SHSID students at the Indexademics and Data Science teams, designed to enable students to build their 4-year plan.
 
-<img width="1054" height="679" alt="image" src="https://github.com/user-attachments/assets/6577cc8f-7d93-4ccc-86dd-151ccf0754a5" />
+<img width="1047" height="692" alt="image" src="https://github.com/user-attachments/assets/d87d1bb3-c925-4140-a6b4-86cdd26ebf86" />
 
 ### Intuition
 Navigating the SHSID course catalog can be complex, with a web of prerequisites, tracks (AP, IB, A-Level), and course dependencies. We built this tool to transform the static hard-cover catalog into a dynamic, visual map that gives more accessibility to students across campus. 
