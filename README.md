@@ -2,15 +2,15 @@
 
 An interactive course selection tool for SHSID students, built by SHSID students at the Indexademics and Data Science teams, designed to enable students to build their 4-year plan.
 
-<img width="1047" height="692" alt="image" src="https://github.com/user-attachments/assets/d87d1bb3-c925-4140-a6b4-86cdd26ebf86" />
+<img width="1054" height="679" alt="image" src="https://github.com/user-attachments/assets/6577cc8f-7d93-4ccc-86dd-151ccf0754a5" />
 
 ### Intuition
 Navigating the SHSID course catalog can be complex, with a web of prerequisites, tracks (AP, IB, A-Level), and course dependencies. We built this tool to transform the static hard-cover catalog into a dynamic, visual map that gives more accessibility to students across campus. 
 
 We also noticed that students often don't realize which courses are for who. Even though the course catalog offers introductions, sometimes a direct rating and comment from students are what's needed to really tell courses apart. 
 
-- **Backend (by [Will Chen](https://github.com/WillUHD))**: uses a graph theory optimization approach to check course configuration rules, to make sure selection roadmaps remain accurate. Remote profile fetched [here](https://github.com/WillUHD/CourseResources).
-- **Frontend (by [Ziqian Huang](https://github.com/Ziqian-Huang0607))**: a modern looking wrapper that renders the state faithfully according to the backend, ensuring the UI is a perfect reflection of the underlying logic.
+- **Backend, designs, UI (by [Will Chen](https://github.com/WillUHD))**: uses a graph theory optimized / topological sorting approach for checking course configuration rules, to make sure selection roadmaps remain accurate. Remote profile fetched [here](https://github.com/WillUHD/CourseResources).
+- **Frontend concepts, prototypes, maintaining (by [Ziqian Huang](https://github.com/Ziqian-Huang0607))**: a modern looking wrapper that renders the state faithfully according to the backend, ensuring the UI is a perfect reflection of the underlying logic.
 
 ### Use the interactive features
 - Start by selecting any course and build your 4-year roadmap from there! 
@@ -33,5 +33,5 @@ We also noticed that students often don't realize which courses are for who. Eve
 
 ### Support
 - **Maintenance**: Indexademics team
-- **Contact**: `mlfusion@outlook.com` / `willuhd` on WeChat for course catalog issues
+- **Contact**: `mlfusion@outlook.com` / `willcxd` on WeChat for course catalog issues
 - **⚠️ Disclaimer**: This is an unofficial tool that is not affiliated with SHSID. All course information is based on the SHSID Course Catalog and is for reference purposes only. Course availability and policies are subject to change by the school administration.
