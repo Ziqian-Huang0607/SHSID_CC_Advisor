@@ -1,14 +1,14 @@
 <template>
   <div
-    class="h-screen bg-[#F2F2F7] dark:bg-[#000000] text-[#1C1C1E] dark:text-[#F2F2F7] p-4 md:p-6 font-sans relative overflow-clip flex flex-col antialiased selection:bg-[#007AFF]/30 select-none"
+    class="min-h-screen bg-[#F2F2F7] dark:bg-[#000000] text-[#1C1C1E] dark:text-[#F2F2F7] p-2 sm:p-4 md:p-6 font-sans relative overflow-x-hidden overflow-y-clip md:overflow-clip flex flex-col antialiased selection:bg-[#007AFF]/30 select-none"
     @mousemove="updateMousePosition"
   >
     <!-- Header -->
-    <header class="flex justify-between items-center mb-4 relative z-50 shrink-0 max-w-[1400px] mx-auto w-full px-2">
-      <div class="flex items-center">
-        <img src="/cc-icon.png" class="w-10 h-10 md:w-14 md:h-14 object-contain mr-4 pointer-events-none" alt="CC Logo" draggable="false" />
+    <header class="flex justify-between items-center gap-2 mb-4 relative z-50 shrink-0 max-w-[1400px] mx-auto w-full px-2">
+      <div class="flex items-center min-w-0">
+        <img src="/cc-icon.png" class="w-10 h-10 md:w-14 md:h-14 object-contain mr-3 md:mr-4 pointer-events-none" alt="CC Logo" draggable="false" />
         <div class="flex flex-col justify-center">
-          <h1 class="text-2xl md:text-[28px] font-semibold tracking-tight text-black dark:text-white leading-tight">
+          <h1 class="text-xl sm:text-2xl md:text-[28px] font-semibold tracking-tight text-black dark:text-white leading-tight">
             {{ catalogData?.catalogName || 'Course Catalog Interactive' }}
           </h1>
           <p class="text-[#8E8E93] dark:text-[#98989D] mt-0.5 font-medium tracking-tight text-[11px] flex items-center gap-2">
@@ -19,7 +19,7 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 sm:gap-3 shrink-0">
         <div class="relative export-menu-container z-[200]" v-if="hasSelectedCourses">
           <button
             @click="showExportDropdown = !showExportDropdown"
@@ -47,7 +47,7 @@
     </header>
 
     <!-- Main Container -->
-    <div v-if="catalogData" ref="appContainer" class="flex-1 min-h-0 max-w-[1400px] mx-auto w-full bg-[#FFFFFF] dark:bg-[#1C1C1E] rounded-[20px] overflow-clip shadow-2xl border border-black/10 dark:border-white/10 relative z-10 flex animate-fade-in-up">
+    <div v-if="catalogData" ref="appContainer" class="flex-1 min-h-0 max-w-[1400px] mx-auto w-full bg-[#FFFFFF] dark:bg-[#1C1C1E] rounded-[16px] sm:rounded-[20px] overflow-clip shadow-2xl border border-black/10 dark:border-white/10 relative z-10 flex animate-fade-in-up">
       
       <!-- Left Sidebar -->
       <div
