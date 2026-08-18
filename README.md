@@ -19,6 +19,19 @@ We also noticed that students often don't realize which courses are for who. Eve
 - Uses a modern, clean, and minimal interface with familiar human design principles that visually update in real-time based on backend logic
 - Click on any info panel to open a detailed view with crowdsourced student notes/ratings, and enter the search bar for the exact course you like. 
   
+### Public API (for third-party developers)
+
+This repo ships a free, open, CORS-enabled JSON API (Vercel serverless functions in [`api/`](./api)) that exposes the same catalog and prerequisite solver the website uses. If you're building a website, server, or script on top of our data, start here:
+
+- `GET /api/courses` — flat JSON list of all courses (filter by `grade`, `track`, `department`, `q`, `available`)
+- `GET /api/courses/:id` — one course + availability
+- `GET /api/catalog` / `GET /api/meta` — full nested catalog / metadata
+- `GET /api/grades` · `GET /api/tracks` · `GET /api/departments` · `GET /api/status`
+- `POST /api/validate` — validate a course plan with the real solver
+- `POST /api/availability` — per-course availability for any plan
+
+No API key, `Access-Control-Allow-Origin: *`. Full reference with examples: **[docs/API.md](./docs/API.md)**
+
 ### Tech stack & usage
 - **Frontend**: [Vue 3](https://vuejs.org/), [Vite](https://vitejs.dev/), [TypeScript](https://www.typescriptlang.org/), [Tailwind CSS](https://tailwindcss.com/), [GSAP](https://gsap.com/)
 - **Backend**: Full TypeScript
