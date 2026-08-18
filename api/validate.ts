@@ -1,7 +1,7 @@
 // api/validate.ts — validate a course plan against the real Solver.
 // POST body: { "selected": ["MATH101", ...], "moveUps": { "SRC_ID": "TARGET_ID" } }
 // Returns whether the plan is valid, a human-readable reason, and the structured failure tree.
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/types';
 import { CatalogSolver } from '../src/backend/Solver';
 import { getCatalog, ok, fail, handleOptions } from './_lib/catalog';
 

@@ -1,7 +1,7 @@
 // api/availability.ts — availability state for every course, given a plan.
 // POST body: { "selected": [...ids], "moveUps": { "src": "target" } }  (both optional)
 // Returns: { "COURSE_ID": { isAvailable, missingPre, missingCurrent, conflictReason? }, ... }
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/types';
 import { CatalogSolver } from '../src/backend/Solver';
 import { getCatalog, ok, fail, handleOptions } from './_lib/catalog';
 import { parsePlanBody } from './validate';

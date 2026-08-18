@@ -1,5 +1,5 @@
 // api/meta.ts — catalog metadata.
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/types';
 import { getCatalog, flattenCourses, ok, fail, handleOptions } from './_lib/catalog';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

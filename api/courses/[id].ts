@@ -1,5 +1,5 @@
 // api/courses/[id].ts — one course by id, plus its availability under an empty plan.
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from '../_lib/types';
 import { CatalogSolver } from '../../src/backend/Solver';
 import { getCatalog, flattenCourses, ok, fail, handleOptions } from '../_lib/catalog';
 

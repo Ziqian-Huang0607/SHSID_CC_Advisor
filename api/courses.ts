@@ -5,7 +5,7 @@
 //   ?department=math      filter by department
 //   ?q=calculus           case-insensitive search on id/name/description
 //   ?available=true       only courses selectable with an empty plan (uses the real Solver)
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/types';
 import { CatalogSolver } from '../src/backend/Solver';
 import { getCatalog, flattenCourses, ok, fail, handleOptions, type FlatCourse } from './_lib/catalog';
 

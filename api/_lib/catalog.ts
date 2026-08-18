@@ -3,7 +3,7 @@
 // Loads the course catalog through the same Updater the frontend uses,
 // with a short in-memory cache so repeated calls stay fast on warm lambdas.
 
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './types';
 import type { CourseModel, CourseNode } from '../../src/backend/CourseModel';
 import { Updater } from '../../src/backend/Updater';
 

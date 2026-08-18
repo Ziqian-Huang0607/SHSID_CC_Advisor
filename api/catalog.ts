@@ -1,5 +1,5 @@
 // api/catalog.ts — full raw catalog, nested by department and grade.
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/types';
 import { getCatalog, ok, fail, handleOptions } from './_lib/catalog';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
