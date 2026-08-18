@@ -4,10 +4,10 @@ A free, open, CORS-enabled JSON API that exposes the same course catalog and
 prerequisite solver the website uses. No API key required. Any website, server,
 or script can pull from it.
 
-**Base URL:** `https://<your-vercel-domain>/api`
+**Base URL:** `https://cc.indexademics.com/api`
 
-> After deploying to Vercel, replace `<your-vercel-domain>` with your actual domain
-> (e.g. `shsid-cc-advisor.vercel.app`).
+> Pushing this repo to GitHub auto-deploys the API to the domain above via Vercel —
+> no extra configuration needed.
 
 Every response is JSON and wrapped in a consistent envelope:
 
@@ -29,16 +29,16 @@ catalog version you got.
 
 ```bash
 # health check
-curl https://<your-vercel-domain>/api/status
+curl https://cc.indexademics.com/api/status
 
 # every course as a flat list
-curl https://<your-vercel-domain>/api/courses
+curl https://cc.indexademics.com/api/courses
 
 # only G10 CC-track courses
-curl "https://<your-vercel-domain>/api/courses?grade=G10&track=CC"
+curl "https://cc.indexademics.com/api/courses?grade=G10&track=CC"
 
 # validate a plan
-curl -X POST https://<your-vercel-domain>/api/validate \
+curl -X POST https://cc.indexademics.com/api/validate \
   -H "Content-Type: application/json" \
   -d '{ "selected": ["S1MATH01", "S1ENG01"] }'
 ```
@@ -46,7 +46,7 @@ curl -X POST https://<your-vercel-domain>/api/validate \
 JavaScript (browser or Node):
 
 ```js
-const base = 'https://<your-vercel-domain>/api';
+const base = 'https://cc.indexademics.com/api';
 
 const { data } = await fetch(`${base}/courses?grade=G10`).then(r => r.json());
 // data.courses -> [{ id, name, track, department, grade, description, ... }]
