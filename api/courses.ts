@@ -6,7 +6,7 @@
 //   ?q=calculus           case-insensitive search on id/name/description
 //   ?available=true       only courses selectable with an empty plan (uses the real Solver)
 import type { VercelRequest, VercelResponse } from './_lib/types';
-import { CatalogSolver } from '../src/backend/Solver';
+import { CatalogSolver } from './_lib/backend/Solver';
 import { getCatalog, flattenCourses, ok, fail, handleOptions, type FlatCourse } from './_lib/catalog';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

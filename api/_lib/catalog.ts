@@ -4,8 +4,8 @@
 // with a short in-memory cache so repeated calls stay fast on warm lambdas.
 
 import type { VercelRequest, VercelResponse } from './types';
-import type { CourseModel, CourseNode } from '../../src/backend/CourseModel';
-import { Updater } from '../../src/backend/Updater';
+import type { CourseModel, CourseNode } from './backend/CourseModel';
+import { Updater } from './backend/Updater';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 

@@ -2,7 +2,7 @@
 // POST body: { "selected": [...ids], "moveUps": { "src": "target" } }  (both optional)
 // Returns: { "COURSE_ID": { isAvailable, missingPre, missingCurrent, conflictReason? }, ... }
 import type { VercelRequest, VercelResponse } from './_lib/types';
-import { CatalogSolver } from '../src/backend/Solver';
+import { CatalogSolver } from './_lib/backend/Solver';
 import { getCatalog, ok, fail, handleOptions } from './_lib/catalog';
 import { parsePlanBody } from './validate';
 
