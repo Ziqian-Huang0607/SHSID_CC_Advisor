@@ -35,7 +35,7 @@ curl https://cc.indexademics.com/api/status
 curl https://cc.indexademics.com/api/courses
 
 # only G10 CC-track courses
-curl "https://cc.indexademics.com/api/courses?grade=G10&track=CC"
+curl "https://cc.indexademics.com/api/courses?grade=10&track=IB"
 
 # validate a plan
 curl -X POST https://cc.indexademics.com/api/validate \
@@ -95,8 +95,8 @@ Flat list of every course, each tagged with its `department` and `grade`.
 
 | Query param | Effect |
 |---|---|
-| `grade` | Filter by grade, e.g. `?grade=G10` |
-| `track` | Filter by track, e.g. `?track=CC` |
+| `grade` | Filter by grade, e.g. `?grade=10` (grades are `9`/`10`/`11`/`12`) |
+| `track` | Filter by track, e.g. `?track=IB` (tracks are `school`/`AP`/`IB`/`ASA2`) |
 | `department` | Filter by department, e.g. `?department=math` |
 | `q` | Case-insensitive search over id, name, description |
 | `available` | `?available=true` keeps only courses selectable with an empty plan (computed with the real prerequisite solver) |
@@ -152,12 +152,12 @@ One course by id (case-insensitive), plus its `availability` under an empty plan
 
 ### `GET /api/grades`
 ```json
-{ "ok": true, "data": ["G9", "G10", "G11", "G12"] }
+{ "ok": true, "data": ["9", "10", "11", "12"] }
 ```
 
 ### `GET /api/tracks`
 ```json
-{ "ok": true, "data": ["CC", "..."] }
+{ "ok": true, "data": ["school", "AP", "IB", "ASA2"] }
 ```
 
 ### `GET /api/departments`

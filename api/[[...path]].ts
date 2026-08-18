@@ -1,9 +1,109 @@
-// Solver.ts
-// written by willuhd on Apr 6
-// - rewritten to explicitly model targeted move-ups with hybrid dependency injection
-// - uses a dependency flow graph and some random DP concepts
+// api/[[...path]].ts
+// SHSID CC Advisor — public JSON API, single-file edition.
+// Everything (types, catalog loader, solver, router) is inlined here so the
+// Vercel function has zero relative imports and nothing can be lost in bundling.
+//
+// Routes (base: /api):
+//   GET  /api                     service info + endpoint directory
+//   GET  /api/ping                liveness probe
+//   GET  /api/status              health check
+//   GET  /api/meta                catalog metadata
+//   GET  /api/catalog             full raw catalog
+//   GET  /api/courses             flat course list (?grade=&track=&department=&q=&available=)
+//   GET  /api/courses/:id         one course + availability
+//   GET  /api/grades              grades list
+//   GET  /api/tracks              tracks list
+//   GET  /api/departments         departments + counts
+//   POST /api/validate            validate a plan { selected, moveUps }
+//   POST /api/availability        availability map for a plan { selected, moveUps }
 
-import type { CourseModel, CourseNode } from "./CourseModel";
+// ---------------------------------------------------------------- types ----
+
+interface CourseRules {
+    pre?: string[][];
+    current?: string[][];
+    next?: string[][];
+    [key: string]: any;
+}
+
+interface CourseNode {
+    id: string;
+    name?: string;
+    track: string;
+    description: string;
+    crowdRating: number;
+    crowdReview: string;
+    level?: string;
+    rules?: CourseRules;
+    moveUp?: string;
+    moveUpTargetId?: string;
+    [key: string]: any;
+}
+
+interface CourseModel {
+    catalogName: string;
+    version: string;
+    lastUpdated: string;
+    credit: string;
+    footnote: string;
+    grades: string[];
+    tracks: string[];
+    departments: Record<string, any>;
+    [key: string]: any;
+}
+
+interface FlatCourse extends CourseNode {
+    department: string;
+    grade: string;
+}
+
+// ----------------------------------------------------- catalog loading ----
+
+const CATALOG_URL =
+    "https://edgeone.gh-proxy.org/https://raw.githubusercontent.com/WillUHD/CourseResources/refs/heads/main/Courses.catalog";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+let cachedModel: CourseModel | null = null;
+let cachedAt = 0;
+
+async function getCatalog(forceRefresh = false): Promise<CourseModel> {
+    if (!forceRefresh && cachedModel && Date.now() - cachedAt < CACHE_TTL_MS) {
+        return cachedModel;
+    }
+    const response = await fetch(CATALOG_URL, { cache: "no-store" as RequestCache });
+    if (!response.ok) {
+        throw new Error(`Upstream catalog fetch failed with status ${response.status}`);
+    }
+    const raw = await response.text();
+    const stripped = raw
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/,\s*([}\]])/g, "$1");
+    const model = JSON.parse(stripped) as CourseModel;
+    cachedModel = model;
+    cachedAt = Date.now();
+    return model;
+}
+
+function flattenCourses(catalog: CourseModel): FlatCourse[] {
+    const out: FlatCourse[] = [];
+    const depts = catalog.departments || {};
+    for (const [deptName, deptData] of Object.entries(depts)) {
+        if (deptName === "residuals" && Array.isArray(deptData)) {
+            (deptData as CourseNode[]).forEach((c) =>
+                out.push({ ...c, department: "residuals", grade: "Residual" }),
+            );
+            continue;
+        }
+        if (typeof deptData !== "object" || deptData === null || Array.isArray(deptData)) continue;
+        for (const [grade, courses] of Object.entries(deptData)) {
+            if (!Array.isArray(courses)) continue;
+            (courses as CourseNode[]).forEach((c) => out.push({ ...c, department: deptName, grade }));
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------- solver --------
 
 type RuleKind = "pre" | "current";
 
@@ -28,7 +128,7 @@ interface ResolutionContext {
     resolved: Set<string>;
 }
 
-export interface ResolutionFailure {
+interface ResolutionFailure {
     type: "group_conflict" | "missing_reference" | "cycle" | "dead_end" | "track_lock";
     sourceCourseId: string;
     requirement?: RequirementNode;
@@ -57,14 +157,14 @@ interface PlanResolution {
     failure?: ResolutionFailure;
 }
 
-export interface CourseAvailabilityState {
+interface CourseAvailabilityState {
     isAvailable: boolean;
     missingPre: string[][];
     missingCurrent: string[][];
     conflictReason?: string;
 }
 
-export class CatalogSolver {
+class CatalogSolver {
     private catalog: CourseModel;
     public courseMap: Map<string, GraphCourseNode> = new Map();
     private conflictGroups: Map<string, Set<string>> = new Map();
@@ -72,8 +172,6 @@ export class CatalogSolver {
     private selectedCourses: Set<string> = new Set();
     private moveUps: Map<string, string> = new Map();
     private evaluationCache: Map<string, CourseAvailabilityState> = new Map();
-
-    private subscribers: Array<(state: Record<string, CourseAvailabilityState>) => void> = [];
 
     constructor(catalog: CourseModel) {
         this.catalog = catalog;
@@ -85,7 +183,7 @@ export class CatalogSolver {
 
         for (const [deptName, deptData] of Object.entries(depts)) {
             if (deptName === "residuals" && Array.isArray(deptData)) {
-                deptData.forEach(course => {
+                deptData.forEach((course: CourseNode) => {
                     this.addCourseNode(course, { department: deptName, grade: "Residual" });
                 });
                 continue;
@@ -101,7 +199,7 @@ export class CatalogSolver {
                 const conflictGroupId = `${deptName}::${grade}`;
                 const group = this.conflictGroups.get(conflictGroupId) ?? new Set<string>();
 
-                courses.forEach(course => {
+                courses.forEach((course: CourseNode) => {
                     this.addCourseNode(course, { department: deptName, grade, conflictGroupId });
                     group.add(course.id);
                 });
@@ -115,7 +213,7 @@ export class CatalogSolver {
         const requirements: RequirementNode[] = [];
         const continuationTargets = new Set<string>();
 
-        (["pre", "current"] as const).forEach(kind => {
+        (["pre", "current"] as const).forEach((kind) => {
             course.rules?.[kind]?.forEach((options, index) => {
                 const sanitizedOptions = options.filter(Boolean);
                 if (sanitizedOptions.length === 0) return;
@@ -124,45 +222,27 @@ export class CatalogSolver {
                     id: `${course.id}:${kind}:${index}`,
                     courseId: course.id,
                     kind,
-                    options: sanitizedOptions
+                    options: sanitizedOptions,
                 });
             });
         });
 
-        course.rules?.next?.forEach(options => {
-            options.filter(Boolean).forEach(targetId => continuationTargets.add(targetId));
+        course.rules?.next?.forEach((options) => {
+            options.filter(Boolean).forEach((targetId) => continuationTargets.add(targetId));
         });
 
         this.courseMap.set(course.id, {
             ...course,
             ...meta,
             requirements,
-            continuationTargets: [...continuationTargets]
+            continuationTargets: [...continuationTargets],
         });
-    }
-
-    public subscribe(callback: (state: Record<string, CourseAvailabilityState>) => void): () => void {
-        this.subscribers.push(callback);
-        callback(this.evaluateGraph());
-        return () => {
-            this.subscribers = this.subscribers.filter(cb => cb !== callback);
-        };
-    }
-
-    public forceNotify() {
-        this.evaluationCache.clear();
-        const state = this.evaluateGraph();
-        this.subscribers.forEach(cb => cb(state));
     }
 
     public setSelected(selected: Set<string>, moveUps: Map<string, string>) {
         this.selectedCourses = new Set(selected);
         this.moveUps = new Map(moveUps);
-        this.forceNotify();
-    }
-
-    public isCourseAvailable(courseId: string): boolean {
-        return this.evaluateCourseAvailability(courseId).isAvailable;
+        this.evaluationCache.clear();
     }
 
     public evaluateGraph(): Record<string, CourseAvailabilityState> {
@@ -173,13 +253,13 @@ export class CatalogSolver {
         return state;
     }
 
-    public simulatePlanValidity(selected: Set<string>, moveUps: Map<string, string>, focusTargetId?: string): { ok: boolean, reason?: string, failure?: ResolutionFailure } {
+    public simulatePlanValidity(selected: Set<string>, moveUps: Map<string, string>, focusTargetId?: string): { ok: boolean; reason?: string; failure?: ResolutionFailure } {
         const plan = this.buildEffectivePlan(selected, moveUps);
         const resolution = this.resolvePlan(plan);
         return {
             ok: resolution.ok,
             reason: resolution.ok ? undefined : this.describeFailure(resolution.failure, focusTargetId || "course"),
-            failure: resolution.failure
+            failure: resolution.failure,
         };
     }
 
@@ -191,7 +271,7 @@ export class CatalogSolver {
         const course = this.courseMap.get(courseId);
         if (!course) {
             const missingState: CourseAvailabilityState = {
-                isAvailable: false, missingPre: [], missingCurrent: [], conflictReason: `Course ${courseId} missing.`
+                isAvailable: false, missingPre: [], missingCurrent: [], conflictReason: `Course ${courseId} missing.`,
             };
             this.evaluationCache.set(cacheKey, missingState);
             return missingState;
@@ -199,7 +279,7 @@ export class CatalogSolver {
 
         const projectedPlan = this.projectSelectionForCourse(courseId);
         const resolution = this.resolvePlan(projectedPlan);
-        
+
         const result: CourseAvailabilityState = {
             isAvailable: resolution.ok,
             missingPre: this.getMissingRequirements(course.rules?.pre, projectedPlan.explicitTargets),
@@ -221,7 +301,7 @@ export class CatalogSolver {
             for (const s of [...selected]) {
                 if (s === courseId) continue;
                 const t = moveUps.get(s) || s;
-                
+
                 if (this.getConflictGroupId(t) === courseGroup || this.getConflictGroupId(s) === courseGroup) {
                     selected.delete(s);
                     moveUps.delete(s);
@@ -259,7 +339,7 @@ export class CatalogSolver {
         let context: ResolutionContext = {
             closure: new Set(),
             occupancy: new Map(),
-            resolved: new Set()
+            resolved: new Set(),
         };
 
         const sortedTargets = [...plan.explicitTargets].sort();
@@ -299,7 +379,7 @@ export class CatalogSolver {
         courseId: string,
         context: ResolutionContext,
         path: string[],
-        plan: EffectivePlan
+        plan: EffectivePlan,
     ): ResolutionResult {
         if (context.resolved.has(courseId)) return { ok: true, context };
         if (path.includes(courseId)) return { ok: false, context, failure: { type: "cycle", sourceCourseId: courseId, path: [...path, courseId] } };
@@ -345,7 +425,7 @@ export class CatalogSolver {
 
             const branchContext = this.cloneContext(context);
             const branchResult = this.resolveCourse(optionId, branchContext, path, plan);
-            
+
             if (branchResult.ok) {
                 const continuationFailure = this.findContinuationConflict(branchResult.context.closure, plan);
                 if (continuationFailure) {
@@ -373,7 +453,7 @@ export class CatalogSolver {
             if (!nextGradeGroup) continue;
 
             const allowedTargets = new Set(sourceCourse.continuationTargets);
-            
+
             for (const targetCourseId of nextGradeGroup) {
                 if (targetCourseId === sourceCourseId) continue;
                 if (!closure.has(targetCourseId)) continue;
@@ -389,7 +469,7 @@ export class CatalogSolver {
                     sourceCourseId,
                     targetCourseId,
                     blockerCourseId: sourceCourseId,
-                    continuationTargets: [...allowedTargets]
+                    continuationTargets: [...allowedTargets],
                 };
             }
         }
@@ -412,7 +492,7 @@ export class CatalogSolver {
             case "missing_reference": return `Catalog rule references missing course ${failure.targetCourseId || focusCourseId}.`;
             case "cycle": return `Catalog rule contains a dependency cycle around ${this.getCourseName(focusCourseId)}.`;
             case "dead_end": {
-                const nestedReason = failure.causes?.map(cause => this.describeFailure(cause, focusCourseId)).find(Boolean);
+                const nestedReason = failure.causes?.map((cause) => this.describeFailure(cause, focusCourseId)).find(Boolean);
                 if (nestedReason) return nestedReason;
                 if (failure.requirement) return `${failure.requirement.kind === "current" ? "Concurrent path" : "Prerequisite path"} cannot be satisfied.`;
                 return `No valid rule path remains for ${this.getCourseName(focusCourseId)}.`;
@@ -446,6 +526,214 @@ export class CatalogSolver {
 
     private getMissingRequirements(dnf: string[][] | undefined, targets: Set<string>): string[][] {
         if (!dnf) return [];
-        return dnf.filter(orBlock => !orBlock.some(id => targets.has(id)));
+        return dnf.filter((orBlock) => !orBlock.some((id) => targets.has(id)));
+    }
+}
+
+// ------------------------------------------------------ http helpers ------
+
+function withCors(res: any, methods = "GET, OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", methods);
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+function ok(res: any, data: unknown, cacheSeconds = 300) {
+    res.setHeader("Cache-Control", `s-maxage=${cacheSeconds}, stale-while-revalidate`);
+    return res.status(200).json({ ok: true, data });
+}
+
+function fail(res: any, status: number, message: string) {
+    return res.status(status).json({ ok: false, error: message });
+}
+
+function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string, string> } {
+    const selected = new Set<string>(
+        Array.isArray(body?.selected) ? body.selected.filter((x: any) => typeof x === "string") : [],
+    );
+    const moveUps = new Map<string, string>(
+        Object.entries(body?.moveUps ?? {}).filter(
+            ([k, v]) => typeof k === "string" && typeof v === "string",
+        ) as [string, string][],
+    );
+    return { selected, moveUps };
+}
+
+// ------------------------------------------------------------ router ------
+
+export default async function handler(req: any, res: any) {
+    withCors(res);
+    if (req.method === "OPTIONS") {
+        return res.status(204).end();
+    }
+
+    // Resolve the path segments. Vercel passes catch-all segments in req.query.path;
+    // fall back to parsing req.url just in case.
+    let segments: string[] = [];
+    const qp = req.query?.path;
+    if (Array.isArray(qp)) segments = qp.filter(Boolean);
+    else if (typeof qp === "string" && qp) segments = [qp];
+    if (segments.length === 0 && typeof req.url === "string") {
+        const pathname = req.url.split("?")[0];
+        segments = pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
+    }
+
+    const route = segments.join("/").toLowerCase();
+    const q = req.query ?? {};
+
+    try {
+        // ---- liveness / info (no catalog needed) ----
+        if (route === "ping") {
+            return ok(res, "pong");
+        }
+
+        if (route === "") {
+            const catalog = await getCatalog();
+            return ok(res, {
+                service: "SHSID CC Advisor API",
+                version: catalog.version,
+                lastUpdated: catalog.lastUpdated,
+                docs: "https://github.com/Ziqian-Huang0607/SHSID_CC_Advisor/blob/main/docs/API.md",
+                endpoints: [
+                    "GET  /api              — this directory",
+                    "GET  /api/ping         — liveness probe",
+                    "GET  /api/status       — health check",
+                    "GET  /api/meta         — catalog metadata (name, version, counts)",
+                    "GET  /api/catalog      — full raw catalog (nested by department/grade)",
+                    "GET  /api/courses      — flat list of all courses; filters: ?grade=&track=&department=&q=&available=",
+                    "GET  /api/courses/:id  — one course by id",
+                    "GET  /api/grades       — list of grades",
+                    "GET  /api/tracks       — list of tracks",
+                    "GET  /api/departments  — departments with course counts",
+                    "POST /api/validate     — validate a course plan; body: { \"selected\": [...ids], \"moveUps\": { \"srcId\": \"targetId\" } }",
+                    "POST /api/availability — availability state for every course given a plan; same body as /api/validate",
+                ],
+            });
+        }
+
+        if (route === "status") {
+            const catalog = await getCatalog();
+            return ok(res, {
+                status: "up",
+                catalogVersion: catalog.version,
+                lastUpdated: catalog.lastUpdated,
+                time: new Date().toISOString(),
+            });
+        }
+
+        if (route === "meta") {
+            const catalog = await getCatalog(q.refresh === "true");
+            return ok(res, {
+                catalogName: catalog.catalogName,
+                version: catalog.version,
+                lastUpdated: catalog.lastUpdated,
+                credit: catalog.credit,
+                footnote: catalog.footnote,
+                grades: catalog.grades,
+                tracks: catalog.tracks,
+                courseCount: flattenCourses(catalog).length,
+                departments: Object.keys(catalog.departments || {}),
+            });
+        }
+
+        if (route === "catalog") {
+            return ok(res, await getCatalog(q.refresh === "true"));
+        }
+
+        if (route === "grades") {
+            return ok(res, (await getCatalog()).grades);
+        }
+
+        if (route === "tracks") {
+            return ok(res, (await getCatalog()).tracks);
+        }
+
+        if (route === "departments") {
+            const catalog = await getCatalog();
+            const summary = Object.entries(catalog.departments || {}).map(([name, data]: [string, any]) => {
+                if (name === "residuals" && Array.isArray(data)) {
+                    return { name, grades: ["Residual"], courseCount: data.length };
+                }
+                const grades = Object.keys(data || {});
+                const courseCount = grades.reduce((n, g) => n + (Array.isArray(data[g]) ? data[g].length : 0), 0);
+                return { name, grades, courseCount };
+            });
+            return ok(res, summary);
+        }
+
+        if (route === "courses") {
+            const catalog = await getCatalog();
+            let courses = flattenCourses(catalog);
+
+            if (typeof q.grade === "string") {
+                courses = courses.filter((c) => c.grade.toLowerCase() === (q.grade as string).toLowerCase());
+            }
+            if (typeof q.track === "string") {
+                courses = courses.filter((c) => c.track.toLowerCase() === (q.track as string).toLowerCase());
+            }
+            if (typeof q.department === "string") {
+                courses = courses.filter((c) => c.department.toLowerCase() === (q.department as string).toLowerCase());
+            }
+            if (typeof q.q === "string" && q.q.trim()) {
+                const needle = (q.q as string).trim().toLowerCase();
+                courses = courses.filter((c) =>
+                    c.id.toLowerCase().includes(needle) ||
+                    (c.name ?? "").toLowerCase().includes(needle) ||
+                    (c.description ?? "").toLowerCase().includes(needle),
+                );
+            }
+            if (q.available === "true") {
+                const solver = new CatalogSolver(catalog);
+                const state = solver.evaluateGraph();
+                courses = courses.filter((c) => state[c.id]?.isAvailable);
+            }
+
+            return ok(res, { count: courses.length, courses });
+        }
+
+        if (route.startsWith("courses/")) {
+            const id = decodeURIComponent(segments[1] ?? "");
+            if (!id) return fail(res, 400, "Missing course id");
+            const catalog = await getCatalog();
+            const course = flattenCourses(catalog).find(
+                (c) => c.id.toLowerCase() === id.toLowerCase(),
+            );
+            if (!course) return fail(res, 404, `Course not found: ${id}`);
+            const solver = new CatalogSolver(catalog);
+            const state = solver.evaluateGraph();
+            return ok(res, { ...course, availability: state[course.id] ?? null });
+        }
+
+        if (route === "validate") {
+            if (req.method !== "POST") {
+                return fail(res, 405, "Use POST with a JSON body: { \"selected\": [...], \"moveUps\": { ... } }");
+            }
+            const catalog = await getCatalog();
+            const { selected, moveUps } = parsePlanBody(req.body);
+            const solver = new CatalogSolver(catalog);
+            const result = solver.simulatePlanValidity(selected, moveUps);
+            return ok(res, {
+                valid: result.ok,
+                reason: result.reason ?? null,
+                failure: result.failure ?? null,
+                selectedCount: selected.size,
+            });
+        }
+
+        if (route === "availability") {
+            if (req.method !== "POST") {
+                return fail(res, 405, "Use POST with a JSON body: { \"selected\": [...], \"moveUps\": { ... } }");
+            }
+            const catalog = await getCatalog();
+            const { selected, moveUps } = parsePlanBody(req.body);
+            const solver = new CatalogSolver(catalog);
+            solver.setSelected(selected, moveUps);
+            return ok(res, solver.evaluateGraph());
+        }
+
+        return fail(res, 404, `Unknown endpoint: /api/${route}. GET /api lists all endpoints.`);
+    } catch (e: any) {
+        return fail(res, 502, e?.message ?? "Unknown error");
     }
 }
