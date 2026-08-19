@@ -19,9 +19,10 @@ Every response is JSON and wrapped in a consistent envelope:
 { "ok": false, "error": "message" }
 ```
 
-Responses are cached at the CDN edge (~5 min). Course data updates when the
-upstream catalog updates; the `version` and `lastUpdated` fields tell you which
-catalog version you got.
+`GET` responses are cached at the CDN edge (~5 min). `POST` responses
+(`/api/validate`, `/api/availability`) depend entirely on the request body and are
+sent with `Cache-Control: no-store`. Course data updates when the upstream catalog
+updates; the `version` and `lastUpdated` fields tell you which catalog version you got.
 
 ---
 
@@ -220,7 +221,8 @@ own interactive picker on top of our data. Same body as `/api/validate`
 
 ## CORS, rate limits, fair use
 
-- **CORS:** all endpoints send `Access-Control-Allow-Origin: *`, so browsers can call them directly from any origin.
+- **CORS:** all endpoints send `Access-Control-Allow-Origin: *`, so browsers can call them directly from any origin. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
+- **Request bodies:** the `POST` endpoints accept a JSON object body. Sending `Content-Type: application/json` is recommended; a raw JSON string body is also parsed. A body that isn't a JSON object returns `400` rather than being treated as an empty plan.
 - **Auth:** none. Please don't hammer it — Vercel's standard limits apply. Cache responses on your side where you can.
 - **Freshness:** catalog data is mirrored from the upstream source and cached ~5 minutes; check `version`/`lastUpdated` in `/api/meta`.
 

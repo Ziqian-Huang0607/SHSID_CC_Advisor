@@ -532,7 +532,7 @@ class CatalogSolver {
 
 // ------------------------------------------------------ http helpers ------
 
-function withCors(res: any, methods = "GET, OPTIONS") {
+function withCors(res: any, methods = "GET, POST, OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", methods);
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -544,11 +544,42 @@ function ok(res: any, data: unknown, cacheSeconds = 300) {
     return res.status(200).json({ ok: true, data });
 }
 
+// POST results depend entirely on the request body, which shared caches key nothing on.
+function okUncached(res: any, data: unknown) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({ ok: true, data });
+}
+
 function fail(res: any, status: number, message: string) {
+    if (status === 405) res.setHeader("Allow", "POST, OPTIONS");
     return res.status(status).json({ ok: false, error: message });
 }
 
 function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string, string> } {
+    // Vercel only pre-parses the body when Content-Type is application/json. Without this,
+    // a client that omits the header gets an empty plan back reported as "valid".
+    if (typeof body === "string") {
+        const trimmed = body.trim();
+        if (!trimmed) throw new Error("Request body is empty; expected JSON { selected, moveUps }");
+        try {
+            body = JSON.parse(trimmed);
+        } catch {
+            throw new Error("Request body is not valid JSON");
+        }
+    }
+    if (body === null || body === undefined) {
+        throw new Error("Request body is empty; expected JSON { selected, moveUps }");
+    }
+    if (typeof body !== "object" || Array.isArray(body)) {
+        throw new Error("Request body must be a JSON object { selected, moveUps }");
+    }
+    if (body.selected !== undefined && !Array.isArray(body.selected)) {
+        throw new Error("`selected` must be an array of course ids");
+    }
+    if (body.moveUps !== undefined && (typeof body.moveUps !== "object" || body.moveUps === null || Array.isArray(body.moveUps))) {
+        throw new Error("`moveUps` must be an object mapping source id -> target id");
+    }
+
     const selected = new Set<string>(
         Array.isArray(body?.selected) ? body.selected.filter((x: any) => typeof x === "string") : [],
     );
@@ -693,6 +724,9 @@ export default async function handler(req: any, res: any) {
         }
 
         if (route.startsWith("courses/")) {
+            if (segments.length > 2) {
+                return fail(res, 404, `Unknown endpoint: /api/${route}. Use GET /api/courses/:id.`);
+            }
             const id = decodeURIComponent(segments[1] ?? "");
             if (!id) return fail(res, 400, "Missing course id");
             const catalog = await getCatalog();
@@ -710,10 +744,16 @@ export default async function handler(req: any, res: any) {
                 return fail(res, 405, "Use POST with a JSON body: { \"selected\": [...], \"moveUps\": { ... } }");
             }
             const catalog = await getCatalog();
-            const { selected, moveUps } = parsePlanBody(req.body);
+            let plan;
+            try {
+                plan = parsePlanBody(req.body);
+            } catch (e: any) {
+                return fail(res, 400, e?.message ?? "Invalid request body");
+            }
+            const { selected, moveUps } = plan;
             const solver = new CatalogSolver(catalog);
             const result = solver.simulatePlanValidity(selected, moveUps);
-            return ok(res, {
+            return okUncached(res, {
                 valid: result.ok,
                 reason: result.reason ?? null,
                 failure: result.failure ?? null,
@@ -726,10 +766,15 @@ export default async function handler(req: any, res: any) {
                 return fail(res, 405, "Use POST with a JSON body: { \"selected\": [...], \"moveUps\": { ... } }");
             }
             const catalog = await getCatalog();
-            const { selected, moveUps } = parsePlanBody(req.body);
+            let plan;
+            try {
+                plan = parsePlanBody(req.body);
+            } catch (e: any) {
+                return fail(res, 400, e?.message ?? "Invalid request body");
+            }
             const solver = new CatalogSolver(catalog);
-            solver.setSelected(selected, moveUps);
-            return ok(res, solver.evaluateGraph());
+            solver.setSelected(plan.selected, plan.moveUps);
+            return okUncached(res, solver.evaluateGraph());
         }
 
         return fail(res, 404, `Unknown endpoint: /api/${route}. GET /api lists all endpoints.`);

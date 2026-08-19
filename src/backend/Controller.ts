@@ -3,7 +3,7 @@
 // - the intended public API the frontend calls in order to delegate view events
 // - this updates the view data so the UI can be updated
 
-import { CatalogSolver, type CourseAvailabilityState } from "./Solver";
+import { CatalogSolver, type CourseAvailabilityState, type ResolutionFailure } from "./Solver";
 import type { CourseModel } from "./CourseModel";
 import type { CourseStatus, CourseViewModel } from "./ViewModel";
 
@@ -59,8 +59,14 @@ export class CourseSelectionController {
                 if (course.moveUpTargetId) {
                     moveUpAvailable = true;
                     if (isSelected && !isMoveUpSource) {
-                        let currentTarget: string | undefined = course.moveUpTargetId;
-                        while (currentTarget) {
+                        const sourceGroup = this.solver.getConflictGroupId(id);
+                        // getMoveUpChain is cycle-safe; walking `moveUpTargetId` inline would
+                        // hang the UI on a catalog whose chain loops back on itself.
+                        for (const currentTarget of this.getMoveUpChain(id)) {
+                            if (!sourceGroup || this.solver.getConflictGroupId(currentTarget) !== sourceGroup) {
+                                invalidMoveUpTargets[currentTarget] = "This move-up target is not in the same department and grade";
+                                continue;
+                            }
                             const testMoveUps = new Map(this.moveUps);
                             testMoveUps.set(id, currentTarget);
                             const validRes = this.solver.simulatePlanValidity(this.selectedIds, testMoveUps, currentTarget);
@@ -69,7 +75,6 @@ export class CourseSelectionController {
                             } else {
                                 invalidMoveUpTargets[currentTarget] = validRes.reason || "Current configuration does not allow move-up to this course";
                             }
-                            currentTarget = this.solver.courseMap.get(currentTarget)?.moveUpTargetId;
                         }
                     }
                 }
@@ -149,14 +154,54 @@ export class CourseSelectionController {
         this.solver.setSelected(this.selectedIds, this.moveUps);
     }
 
-    public setExplicitMoveUp(sourceId: string, targetId: string) {
-        if (!this.selectedIds.has(sourceId)) return;
-        this.moveUps.set(sourceId, targetId);
+    /**
+     * Returns the ordered move-up chain reachable from `sourceId`
+     * (sourceId -> moveUpTargetId -> its own moveUpTargetId -> ...).
+     * Guards against a catalog authoring mistake that loops the chain back on itself.
+     */
+    public getMoveUpChain(sourceId: string): string[] {
+        const chain: string[] = [];
+        const seen = new Set<string>([sourceId]);
+        let current = this.solver.courseMap.get(sourceId)?.moveUpTargetId;
+
+        while (current && !seen.has(current)) {
+            chain.push(current);
+            seen.add(current);
+            current = this.solver.courseMap.get(current)?.moveUpTargetId;
+        }
+        return chain;
+    }
+
+    /**
+     * Applies a move-up. Returns false (and changes nothing) when the request is not
+     * a legitimate move-up: the caller is a public API, so the target has to be checked
+     * here rather than relying on the UI only ever offering reachable targets.
+     */
+    public setExplicitMoveUp(sourceId: string, targetId: string): boolean {
+        if (!this.selectedIds.has(sourceId)) return false;
+        if (sourceId === targetId) return false;
+        if (!this.solver.courseMap.has(targetId)) return false;
+
+        // The target must be reachable along the declared move-up chain...
+        if (!this.getMoveUpChain(sourceId).includes(targetId)) return false;
+
+        // ...and must stay inside the source's own department-year slot, otherwise a
+        // move-up silently relocates a course into a different grade or department.
+        const sourceGroup = this.solver.getConflictGroupId(sourceId);
+        if (!sourceGroup || this.solver.getConflictGroupId(targetId) !== sourceGroup) return false;
+
+        // Finally, the resulting plan has to actually resolve.
+        const candidate = new Map(this.moveUps);
+        candidate.set(sourceId, targetId);
+        if (!this.solver.simulatePlanValidity(this.selectedIds, candidate, targetId).ok) return false;
+
+        this.moveUps = candidate;
         this.solver.setSelected(this.selectedIds, this.moveUps);
+        return true;
     }
 
     public removeExplicitMoveUp(sourceId: string) {
-        this.moveUps.delete(sourceId);
+        if (!this.moveUps.delete(sourceId)) return;
         this.pruneBrokenSelections(); // Reverting a moveup might cascade and break downstream courses 
         this.solver.setSelected(this.selectedIds, this.moveUps);
     }
@@ -173,31 +218,46 @@ export class CourseSelectionController {
             const res = this.solver.simulatePlanValidity(this.selectedIds, this.moveUps);
             
             if (!res.ok && res.failure) {
-                const culprit = res.failure.sourceCourseId;
-                
-                if (culprit && this.selectedIds.has(culprit)) {
-                    // Exact culprit is found locally in our selections
+                const culprit = this.resolvePruneCandidate(res.failure);
+
+                if (culprit) {
                     this.selectedIds.delete(culprit);
                     this.moveUps.delete(culprit);
                     changed = true;
-                } else if (culprit) {
-                    // Safety mapping in case the culprit was evaluating off of a move-up target identity
-                    let found = false;
-                    for (const [src, tgt] of this.moveUps.entries()) {
-                        if (tgt === culprit || src === culprit) {
-                            this.selectedIds.delete(src);
-                            this.moveUps.delete(src);
-                            changed = true;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) break; // Infinite loop fail-safe exit
                 } else {
-                    break; 
+                    break; // Nothing left that we own; avoid spinning forever
                 }
             }
         } while (changed && iterations < 50);
+    }
+
+    /**
+     * Maps a solver failure back onto a selection we are actually allowed to drop.
+     *
+     * `failure.sourceCourseId` is often an intermediate dependency rather than
+     * something the user picked (e.g. a `dead_end` names the requirement's owner).
+     * Walking the failure path — and finally any remaining selection — keeps the plan
+     * from being left in a permanently invalid state.
+     */
+    private resolvePruneCandidate(failure: ResolutionFailure): string | undefined {
+        const candidates: string[] = [];
+        if (failure.sourceCourseId) candidates.push(failure.sourceCourseId);
+        if (failure.targetCourseId) candidates.push(failure.targetCourseId);
+        if (failure.blockerCourseId) candidates.push(failure.blockerCourseId);
+        // The head of the path is the explicit target the resolver started from.
+        if (failure.path?.length) candidates.push(failure.path[0]!, ...failure.path);
+
+        for (const candidate of candidates) {
+            if (this.selectedIds.has(candidate)) return candidate;
+            // The failure may be phrased in terms of a move-up target identity.
+            for (const [src, tgt] of this.moveUps.entries()) {
+                if (tgt === candidate || src === candidate) return src;
+            }
+        }
+
+        // Last resort: the plan is broken but the solver blamed something we don't own.
+        // Drop an arbitrary (stable) selection so the loop keeps making progress.
+        return [...this.selectedIds].sort().pop();
     }
 
     private clearConflictingSelection(courseId: string) {

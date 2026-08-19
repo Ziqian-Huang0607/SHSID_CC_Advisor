@@ -106,6 +106,22 @@ export class CatalogLinter {
             });
         });
 
+        // 3b. Move-up chain cycles.
+        // The Controller walks `moveUpTargetId` iteratively; a loop here would hang the UI.
+        courseMap.forEach((_, id) => {
+            const seen = new Set<string>([id]);
+            let current = courseMap.get(id)?.moveUpTargetId;
+
+            while (current) {
+                if (seen.has(current)) {
+                    errors.push(`Cyclic Move-Up Chain Detected: ${[...seen].join(' -> ')} -> ${current}`);
+                    break;
+                }
+                seen.add(current);
+                current = courseMap.get(current)?.moveUpTargetId;
+            }
+        });
+
         // 4. Cyclic Dependency Detection (DFS)
         const visitState = new Map<string, 0 | 1 | 2>();
         courseMap.forEach((_, id) => visitState.set(id, 0));
@@ -135,6 +151,7 @@ export class CatalogLinter {
             if (visitState.get(id) === 0) detectCycle(id, []);
         });
 
-        return errors;
+        // The same structural problem is reachable from many entry points; report it once.
+        return [...new Set(errors)];
     }
 }

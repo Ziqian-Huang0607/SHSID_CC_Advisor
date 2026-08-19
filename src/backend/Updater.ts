@@ -10,14 +10,20 @@ export class Updater {
     private static readonly fileName = "Courses";
     private static readonly fileExt = "catalog";
     private static readonly baseURL = "https://edgeone.gh-proxy.org/https://raw.githubusercontent.com/WillUHD/CourseResources/refs/heads/main/";
+    private static readonly timeoutMs = 15000;
 
     public async initialize(): Promise<CourseModel | null> {
         const remoteUrl = `${Updater.baseURL}${Updater.fileName}.${Updater.fileExt}`;
         let lastError: unknown = null;
 
+        // Without a deadline a stalled proxy leaves the UI on a permanently blank screen,
+        // because the caller never gets a resolution either way.
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), Updater.timeoutMs);
+
         try {
             // Always fetch the remote catalog directly; no local fallback or caching layer.
-            const response = await fetch(remoteUrl, { cache: 'no-store' });
+            const response = await fetch(remoteUrl, { cache: 'no-store', signal: abort.signal });
 
             if (!response.ok) {
                 throw new Error(`Network response was ${response.status}`);
@@ -36,6 +42,8 @@ export class Updater {
             }
         } catch (error) {
             lastError = error;
+        } finally {
+            clearTimeout(timer);
         }
 
         if (lastError) {
