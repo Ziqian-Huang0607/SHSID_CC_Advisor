@@ -9,7 +9,16 @@ import type { CourseStatus, CourseViewModel } from "./ViewModel";
 
 export class CourseSelectionController {
     private solver: CatalogSolver;
+
+    // What the student actually chose. This — not the derived plan below — is what the
+    // solver evaluates against, so availability stays exactly as flexible as it was
+    // before implied courses were surfaced: a prerequisite the solver picked on the
+    // student's behalf must never constrain what they can pick next.
     private selectedIds: Set<string> = new Set();
+
+    // The full plan the UI renders: the chosen courses plus every prerequisite and
+    // concurrent course they entail. Derived from `selectedIds` after every change.
+    private planIds: Set<string> = new Set();
     
     // Maps a base source course to its explicitly selected move-up target
     private moveUps: Map<string, string> = new Map();
@@ -26,7 +35,7 @@ export class CourseSelectionController {
                 const solverState = internalState[id];
                 if (!solverState) return;
 
-                const isSelected = this.selectedIds.has(id);
+                const isSelected = this.planIds.has(id);
                 const isMoveUpSource = this.moveUps.has(id);
                 const explicitTargetId = this.moveUps.get(id);
 
@@ -60,6 +69,10 @@ export class CourseSelectionController {
                     moveUpAvailable = true;
                     if (isSelected && !isMoveUpSource) {
                         const sourceGroup = this.solver.getConflictGroupId(id);
+                        // The course may be in the plan only because something else implied
+                        // it; moving it up is an explicit choice about it, so simulate
+                        // against a selection that owns it.
+                        const testSelected = new Set(this.selectedIds).add(id);
                         // getMoveUpChain is cycle-safe; walking `moveUpTargetId` inline would
                         // hang the UI on a catalog whose chain loops back on itself.
                         for (const currentTarget of this.getMoveUpChain(id)) {
@@ -69,7 +82,7 @@ export class CourseSelectionController {
                             }
                             const testMoveUps = new Map(this.moveUps);
                             testMoveUps.set(id, currentTarget);
-                            const validRes = this.solver.simulatePlanValidity(this.selectedIds, testMoveUps, currentTarget);
+                            const validRes = this.solver.simulatePlanValidity(testSelected, testMoveUps, currentTarget);
                             if (validRes.ok) {
                                 validMoveUpTargets.push(currentTarget);
                             } else {
@@ -127,7 +140,7 @@ export class CourseSelectionController {
 
     public connectView(callback: (viewModels: Record<string, CourseViewModel>) => void) {
         this.onUpdate = callback;
-        this.solver.forceNotify();
+        this.commit();
     }
 
     public handleTap(courseId: string) {
@@ -142,16 +155,88 @@ export class CourseSelectionController {
         // Target cancellations are now handled via dedicated path in Frontend bridging to removeExplicitMoveUp
         if (isTarget) return; 
 
-        if (this.selectedIds.has(courseId)) {
-            this.selectedIds.delete(courseId);
-            this.moveUps.delete(courseId);
-            this.pruneBrokenSelections();
+        if (this.planIds.has(courseId)) {
+            this.removeFromPlan(courseId);
         } else if (this.solver.isCourseAvailable(courseId)) {
             this.clearConflictingSelection(courseId);
             this.selectedIds.add(courseId);
         }
 
+        this.commit();
+    }
+
+    /**
+     * Recomputes the derived plan and republishes state to the view.
+     *
+     * `planIds` is the requirement closure of the student's choices: the courses they
+     * picked plus every prerequisite and concurrent course those entail. The solver
+     * resolves a course by inventing the prerequisites it needs and calling the plan
+     * valid, so selecting "Biology 10 Honors" alone produced a plan whose grade 9 slot
+     * was empty — and that empty slot is what got exported as the student's 4-year
+     * plan. Surfacing the closure makes the plan the student sees the whole set of
+     * courses they would actually take.
+     *
+     * The closure is deliberately *derived* rather than folded back into `selectedIds`:
+     * the solver keeps evaluating against the explicit choices only, so a prerequisite
+     * it picked never narrows what the student can choose next.
+     */
+    private commit() {
+        this.planIds = this.derivePlan();
         this.solver.setSelected(this.selectedIds, this.moveUps);
+    }
+
+    private derivePlan(): Set<string> {
+        const resolution = this.solver.resolveSelection(this.selectedIds, this.moveUps);
+        if (!resolution.ok) return new Set(this.selectedIds);
+
+        const plan = new Set<string>();
+        for (const courseId of resolution.closure) {
+            // A move-up target stands in for its source in the resolved plan; the UI
+            // renders the source as selected and flags the target separately.
+            plan.add(resolution.sourceByTarget.get(courseId) ?? courseId);
+        }
+        return plan;
+    }
+
+    /**
+     * Removes a course from the plan, along with anything that only existed to serve it.
+     *
+     * Two directions have to be handled. Downstream: a choice whose prerequisite just
+     * left is no longer supported and has to go. Upstream: a course the student never
+     * picked, which the solver pulled in purely as support, should disappear once the
+     * course that needed it is gone — otherwise unclicking one card strands
+     * prerequisites in other departments that the student then has to hunt down.
+     *
+     * The upstream half falls out of deriving the plan from the explicit choices: drop
+     * the choices that depend on what was removed, and the support they carried is
+     * simply not derived again.
+     */
+    private removeFromPlan(courseId: string) {
+        this.forget(courseId);
+
+        // A choice that still needs a removed course would pull it straight back into
+        // the derived plan, so it goes too.
+        const removed = new Set<string>([courseId]);
+        for (let iterations = 0; iterations < 50; iterations++) {
+            const dependents = [...this.selectedIds].filter(id => {
+                const closure = this.solver.resolveSelection(new Set([id]), this.moveUps).closure;
+                return [...removed].some(goneId => closure.has(goneId));
+            });
+            if (dependents.length === 0) break;
+
+            dependents.forEach(id => {
+                removed.add(id);
+                this.forget(id);
+            });
+        }
+
+        this.pruneBrokenSelections();
+    }
+
+    /** Drops a course from the student's choices, move-up included. */
+    private forget(courseId: string) {
+        this.selectedIds.delete(courseId);
+        this.moveUps.delete(courseId);
     }
 
     /**
@@ -178,7 +263,7 @@ export class CourseSelectionController {
      * here rather than relying on the UI only ever offering reachable targets.
      */
     public setExplicitMoveUp(sourceId: string, targetId: string): boolean {
-        if (!this.selectedIds.has(sourceId)) return false;
+        if (!this.planIds.has(sourceId)) return false;
         if (sourceId === targetId) return false;
         if (!this.solver.courseMap.has(targetId)) return false;
 
@@ -190,20 +275,27 @@ export class CourseSelectionController {
         const sourceGroup = this.solver.getConflictGroupId(sourceId);
         if (!sourceGroup || this.solver.getConflictGroupId(targetId) !== sourceGroup) return false;
 
+        // Moving a course up is an explicit choice about it, even if it entered the plan
+        // as an implied prerequisite — otherwise the move-up would resolve away.
+        const candidateSelected = new Set(this.selectedIds).add(sourceId);
+
         // Finally, the resulting plan has to actually resolve.
         const candidate = new Map(this.moveUps);
         candidate.set(sourceId, targetId);
-        if (!this.solver.simulatePlanValidity(this.selectedIds, candidate, targetId).ok) return false;
+        if (!this.solver.simulatePlanValidity(candidateSelected, candidate, targetId).ok) return false;
 
+        this.selectedIds = candidateSelected;
         this.moveUps = candidate;
-        this.solver.setSelected(this.selectedIds, this.moveUps);
+        // The target carries the source's requirements, so the implied set changes with it.
+        this.commit();
         return true;
     }
 
     public removeExplicitMoveUp(sourceId: string) {
         if (!this.moveUps.delete(sourceId)) return;
+        // The source's own requirements apply again, so the implied set changes with it.
         this.pruneBrokenSelections(); // Reverting a moveup might cascade and break downstream courses 
-        this.solver.setSelected(this.selectedIds, this.moveUps);
+        this.commit();
     }
 
     private pruneBrokenSelections() {
@@ -221,8 +313,7 @@ export class CourseSelectionController {
                 const culprit = this.resolvePruneCandidate(res.failure);
 
                 if (culprit) {
-                    this.selectedIds.delete(culprit);
-                    this.moveUps.delete(culprit);
+                    this.forget(culprit);
                     changed = true;
                 } else {
                     break; // Nothing left that we own; avoid spinning forever
@@ -269,8 +360,7 @@ export class CourseSelectionController {
             const t = this.moveUps.get(s) || s;
             
             if (this.solver.getConflictGroupId(t) === courseGroup || this.solver.getConflictGroupId(s) === courseGroup) {
-                this.selectedIds.delete(s);
-                this.moveUps.delete(s);
+                this.forget(s);
             }
         }
     }

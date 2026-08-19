@@ -263,6 +263,31 @@ class CatalogSolver {
         };
     }
 
+    /**
+     * Resolves a plan and reports its transitive requirement closure: the courses
+     * chosen plus every prerequisite/concurrent course they entail. `resolvePlan` is
+     * lenient — it invents the prerequisites a course needs and calls the plan valid —
+     * so a caller that treats `selected` as the literal plan needs the closure to see
+     * the courses that are actually implied by it.
+     */
+    public resolveSelection(selected: Set<string>, moveUps: Map<string, string>): {
+        ok: boolean;
+        closure: Set<string>;
+        explicitTargets: Set<string>;
+        sourceByTarget: Map<string, string>;
+        failure?: ResolutionFailure;
+    } {
+        const plan = this.buildEffectivePlan(selected, moveUps);
+        const resolution = this.resolvePlan(plan);
+        return {
+            ok: resolution.ok,
+            closure: resolution.closure,
+            explicitTargets: plan.explicitTargets,
+            sourceByTarget: plan.sourceByTarget,
+            failure: resolution.failure,
+        };
+    }
+
     private evaluateCourseAvailability(courseId: string): CourseAvailabilityState {
         const cacheKey = this.makeCacheKey(courseId);
         const cached = this.evaluationCache.get(cacheKey);
@@ -753,11 +778,24 @@ export default async function handler(req: any, res: any) {
             const { selected, moveUps } = plan;
             const solver = new CatalogSolver(catalog);
             const result = solver.simulatePlanValidity(selected, moveUps);
+            const resolution = solver.resolveSelection(selected, moveUps);
+
+            // Courses the plan entails but did not list. The solver treats a plan as
+            // valid when it can invent these, so a caller building a real schedule
+            // needs them spelled out rather than assumed.
+            const implied = result.ok
+                ? [...resolution.closure].filter(
+                      (id) => !resolution.explicitTargets.has(id) && !resolution.sourceByTarget.has(id),
+                  )
+                : [];
+
             return okUncached(res, {
                 valid: result.ok,
                 reason: result.reason ?? null,
                 failure: result.failure ?? null,
                 selectedCount: selected.size,
+                impliedCourses: implied,
+                resolvedPlan: result.ok ? [...resolution.closure] : [],
             });
         }
 

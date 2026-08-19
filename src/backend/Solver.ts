@@ -183,6 +183,32 @@ export class CatalogSolver {
         };
     }
 
+    /**
+     * Resolves a plan and reports the full set of courses it entails.
+     *
+     * `closure` is the plan's transitive requirement closure: the explicitly chosen
+     * courses plus every prerequisite/concurrent course the resolver had to pull in to
+     * make them work. Callers use it to materialize those implied courses into the plan,
+     * so what the student sees is the whole set of courses they would actually take.
+     */
+    public resolveSelection(selected: Set<string>, moveUps: Map<string, string>): {
+        ok: boolean;
+        closure: Set<string>;
+        explicitTargets: Set<string>;
+        sourceByTarget: Map<string, string>;
+        failure?: ResolutionFailure;
+    } {
+        const plan = this.buildEffectivePlan(selected, moveUps);
+        const resolution = this.resolvePlan(plan);
+        return {
+            ok: resolution.ok,
+            closure: resolution.closure,
+            explicitTargets: plan.explicitTargets,
+            sourceByTarget: plan.sourceByTarget,
+            failure: resolution.failure
+        };
+    }
+
     private evaluateCourseAvailability(courseId: string): CourseAvailabilityState {
         const cacheKey = this.makeCacheKey(courseId);
         const cached = this.evaluationCache.get(cacheKey);

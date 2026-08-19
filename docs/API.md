@@ -195,12 +195,27 @@ Validate a course plan with the same solver the site uses.
       "sourceCourseId": "...",
       "targetCourseId": "..."
     },
-    "selectedCount": 2
+    "selectedCount": 2,
+    "impliedCourses": ["S1MATH00"],
+    "resolvedPlan": ["S1MATH00", "S1MATH01", "S1ENG01"]
   }
 }
 ```
 `failure` is a recursive tree — nested `causes` explain chains like dead ends,
 group conflicts, cycles, and track locks.
+
+**Important — `valid: true` does not mean `selected` is complete.** The solver
+resolves a plan by pulling in whatever prerequisites the chosen courses need, so a
+plan listing only a Grade 10 course validates even though its Grade 9 prerequisite
+is missing from `selected`.
+
+- `impliedCourses` — courses the plan requires but `selected` did not list.
+- `resolvedPlan` — the full set of courses the plan entails (`selected` plus
+  `impliedCourses`, with move-up targets substituted for their sources).
+
+If you are building a schedule rather than just checking one, use `resolvedPlan`.
+Both fields are empty when `valid` is `false`. The website itself adds
+`impliedCourses` to the student's selection as soon as they pick a course.
 
 ### `POST /api/availability`
 Availability of **every** course given a partial plan — perfect for building your
