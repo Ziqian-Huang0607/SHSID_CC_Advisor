@@ -46,8 +46,17 @@
       </div>
     </header>
 
+    <!-- Catalog load failure -->
+    <div v-if="loadError" class="flex-1 min-h-0 max-w-[1400px] mx-auto w-full flex items-center justify-center animate-fade-in-up">
+      <div class="max-w-[420px] w-full bg-white dark:bg-[#1C1C1E] rounded-[16px] shadow-2xl border border-black/10 dark:border-white/10 p-6 text-center">
+        <h2 class="text-[15px] font-semibold tracking-tight text-black dark:text-white mb-1.5">Couldn't load the course catalog</h2>
+        <p class="text-[12px] leading-relaxed text-[#8E8E93] dark:text-[#98989D] mb-4">{{ loadError }}</p>
+        <button @click="loadCatalog" class="px-4 h-8 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0070EB] active:bg-[#0062D1] transition-colors duration-0">Try again</button>
+      </div>
+    </div>
+
     <!-- Main Container -->
-    <div v-if="catalogData" ref="appContainer" class="flex-1 min-h-0 max-w-[1400px] mx-auto w-full bg-[#FFFFFF] dark:bg-[#1C1C1E] rounded-[16px] sm:rounded-[20px] overflow-clip shadow-2xl border border-black/10 dark:border-white/10 relative z-10 flex animate-fade-in-up">
+    <div v-else-if="catalogData" ref="appContainer" class="flex-1 min-h-0 max-w-[1400px] mx-auto w-full bg-[#FFFFFF] dark:bg-[#1C1C1E] rounded-[16px] sm:rounded-[20px] overflow-clip shadow-2xl border border-black/10 dark:border-white/10 relative z-10 flex animate-fade-in-up">
       
       <!-- Left Sidebar -->
       <div
@@ -95,7 +104,7 @@
           <button v-if="selectedDept" @click="handleToggleDept(selectedDept)" class="absolute left-3 w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 z-40 active:bg-black/10 transition-colors duration-0">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
           </button>
-          <div class="grid grid-cols-4 w-full h-full">
+          <div class="grid w-full h-full" :style="gradeGridStyle">
             <div v-for="grade in grades" :key="grade" class="flex items-center justify-center font-medium text-[13px] text-[#8E8E93] dark:text-[#98989D]">Grade {{ grade }}</div>
           </div>
         </div>
@@ -103,7 +112,7 @@
         <div class="flex-1 overflow-y-auto overflow-x-clip relative" ref="rightScrollRef" @click="handleContentAreaClick">
           <!-- Main Grid (Specific) -->
           <div v-if="selectedDept" class="p-6 pt-2 relative min-h-full pb-[156px]">
-            <div v-for="dept in visibleDepts" :key="dept" :ref="el => setDeptRowRef(dept, el as Element | null)" class="relative grid grid-cols-4 gap-5 h-full">
+            <div v-for="dept in visibleDepts" :key="dept" :ref="el => setDeptRowRef(dept, el as Element | null)" class="relative grid gap-5 h-full" :style="gradeGridStyle">
               <svg v-if="(deptArrowPaths[dept] || []).length > 0" class="pointer-events-none absolute inset-0 h-full w-full overflow-visible z-[1]" aria-hidden="true">
                 <path v-for="path in deptArrowPaths[dept]" :key="path.key" :data-key="path.key" :d="path.d" fill="none" stroke-linecap="round" vector-effect="non-scaling-stroke" :stroke-dasharray="path.variant === 'dashed' ? '5 5' : undefined" :class="path.variant === 'dashed' ? 'stroke-[2] stroke-[#FF9500] dark:stroke-[#FF9F0A]' : (moveUpState.active ? 'stroke-[1.5] stroke-black/10 dark:stroke-white/10' : 'stroke-[1.5] stroke-[#007AFF] dark:stroke-[#0A84FF]')" />
               </svg>
@@ -144,7 +153,7 @@
           </div>
           <!-- Summary View -->
           <div v-else class="pt-2 px-2 space-y-0.5 relative min-h-full pb-[156px]">
-            <div v-for="dept in visibleDepts" :key="dept" :ref="el => setDeptRowRef(dept, el as Element | null)" class="relative min-h-[36px] grid grid-cols-4 gap-4 px-2 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] rounded-lg">
+            <div v-for="dept in visibleDepts" :key="dept" :ref="el => setDeptRowRef(dept, el as Element | null)" class="relative min-h-[36px] grid gap-4 px-2 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] rounded-lg" :style="gradeGridStyle">
               <svg v-if="(deptArrowPaths[dept] || []).length > 0" class="pointer-events-none absolute inset-0 h-full w-full overflow-visible z-[1]" aria-hidden="true">
                 <path v-for="path in deptArrowPaths[dept]" :key="path.key" :data-key="path.key" :d="path.d" fill="none" stroke-linecap="round" vector-effect="non-scaling-stroke" :stroke-dasharray="path.variant === 'dashed' ? '4 4' : undefined" :class="path.variant === 'dashed' ? 'stroke-[2] stroke-[#FF9500] dark:stroke-[#FF9F0A]' : (moveUpState.active ? 'stroke-[1.5] stroke-black/10 dark:stroke-white/10' : 'stroke-[1.5] stroke-[#007AFF] dark:stroke-[#0A84FF]')" />
               </svg>
@@ -267,11 +276,11 @@
           </div>
         </div>
         <div class="flex flex-col rounded-[16px] overflow-hidden border border-gray-200 shadow-sm bg-gray-50/20">
-          <div class="grid grid-cols-[240px_1fr_1fr_1fr_1fr] bg-[#F2F2F7] border-b border-gray-200">
+          <div class="grid bg-[#F2F2F7] border-b border-gray-200" :style="exportGridStyle">
             <div class="h-10 flex items-center px-8 text-[11px] font-black text-gray-400 uppercase tracking-[0.15em]">Department</div>
             <div v-for="grade in grades" :key="grade" class="h-10 flex items-center justify-center font-bold text-gray-600 text-[12px]">Grade {{ grade }}</div>
           </div>
-          <div v-for="(gradeMap, dept) in exportPlan" :key="dept" class="grid grid-cols-[240px_1fr_1fr_1fr_1fr] border-b border-gray-100 last:border-b-0 bg-white">
+          <div v-for="(gradeMap, dept) in exportPlan" :key="dept" class="grid border-b border-gray-100 last:border-b-0 bg-white" :style="exportGridStyle">
             <div class="bg-[#F2F2F7]/40 px-8 py-2 flex items-center border-r border-gray-200"><span class="text-[12px] font-bold text-gray-800 leading-tight">{{ String(dept).trim() }}</span></div>
             <div v-for="grade in grades" :key="grade" class="relative flex flex-col items-center justify-center p-1.5 border-r border-gray-50 last:border-r-0 min-h-[54px]">
               <template v-if="getGradeExitPoint(String(dept), grade)">
@@ -328,6 +337,7 @@ const uiConfig = {
 
 const appContainer = ref<HTMLElement | null>(null);
 const catalogData = ref<CourseModel | null>(null);
+const loadError = ref<string | null>(null);
 const viewState = ref<Record<string, CourseViewModel>>({});
 const controller = ref<CourseSelectionController | null>(null);
 const viewingCourseId = ref<string | null>(null);
@@ -397,15 +407,35 @@ const onLeftScroll = (e: Event) => { if (isSyncingLeft) { isSyncingLeft = false;
 const onRightScroll = (e: Event) => { if (isSyncingRight) { isSyncingRight = false; return; } if (leftScrollRef.value) { isSyncingLeft = true; leftScrollRef.value.scrollTop = (e.target as HTMLElement).scrollTop; } };
 
 const grades = computed<string[]>(() => catalogData.value?.grades || []);
+// The grid used to hardcode four columns; drive it off the catalog so a catalog
+// shipping a different number of grades still lines up with its column headers.
+const gradeGridStyle = computed(() => ({ gridTemplateColumns: `repeat(${Math.max(1, grades.value.length)}, minmax(0, 1fr))` }));
+const exportGridStyle = computed(() => ({ gridTemplateColumns: `240px repeat(${Math.max(1, grades.value.length)}, minmax(0, 1fr))` }));
+const makeCourseMeta = (course: CourseNode, dept: string, grade: string): CourseMeta => ({
+  id: course.id,
+  dept,
+  grade,
+  raw: course,
+  searchText: `${course.id} ${course.name || ''} ${course.track || ''} ${dept}`.toLowerCase()
+});
+
 const allCourses = computed<CourseMeta[]>(() => {
   if (!catalogData.value) return [];
   const list: CourseMeta[] = [];
-  for (const [dept, gradesObj] of Object.entries(catalogData.value.departments)) {
-    const typedGradesObj = gradesObj as Record<string, CourseNode[]>;
-    for (const [gradeLevel, courseArray] of Object.entries(typedGradesObj)) {
-      if (!courseArray) continue;
+  for (const [dept, deptData] of Object.entries(catalogData.value.departments)) {
+    // `residuals` is a flat CourseNode[] rather than a { grade: CourseNode[] } map.
+    // Iterating it like a grade map yields CourseNode values and throws on `for...of`.
+    if (Array.isArray(deptData)) {
+      for (const course of deptData as CourseNode[]) {
+        if (course?.id) list.push(makeCourseMeta(course, dept, 'Residual'));
+      }
+      continue;
+    }
+    if (!deptData || typeof deptData !== 'object') continue;
+    for (const [gradeLevel, courseArray] of Object.entries(deptData as Record<string, CourseNode[]>)) {
+      if (!Array.isArray(courseArray)) continue;
       for (const course of courseArray) {
-        list.push({ id: course.id, dept, grade: gradeLevel, raw: course, searchText: `${course.id} ${course.name || ''} ${course.track || ''} ${dept}`.toLowerCase() });
+        if (course?.id) list.push(makeCourseMeta(course, dept, gradeLevel));
       }
     }
   }
@@ -941,18 +971,41 @@ const scheduleArrowRefresh = () => { cancelAnimationFrame(arrowFrame); arrowFram
 
 let unsubscribeRatings: (() => void) | null = null;
 
+const loadCatalog = async () => {
+  loadError.value = null;
+  try {
+    const data = await (new Updater()).initialize();
+    if (!data) {
+      loadError.value = 'The catalog could not be reached or could not be parsed. Check your connection and try again.';
+      return;
+    }
+    catalogData.value = data;
+    controller.value = new CourseSelectionController(data);
+    controller.value.connectView(v => viewState.value = v);
+    await nextTick();
+    setupScrollSync(selectedDept.value === null);
+    scheduleArrowRefresh();
+  } catch (e) {
+    console.error(e);
+    loadError.value = e instanceof Error ? e.message : 'An unexpected error occurred while loading the catalog.';
+  }
+};
+
 onMounted(async () => {
   inject(); const pref = window.matchMedia('(prefers-color-scheme: dark)').matches; isDarkMode.value = pref; document.documentElement.classList.toggle('dark', pref);
   window.addEventListener('keydown', handleEscape); window.addEventListener('click', closeDropdown); window.addEventListener('resize', scheduleArrowRefresh);
   if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(scheduleArrowRefresh);
   unsubscribeRatings = ratingStore.onChange(() => { ratingsVersion.value++; });
   ratingStore.loadAggregates().then(() => ratingStore.flushPending());
-  try { const data = await (new Updater()).initialize(); if (data) { catalogData.value = data; controller.value = new CourseSelectionController(data); controller.value.connectView(v => viewState.value = v); await nextTick(); setupScrollSync(selectedDept.value === null); scheduleArrowRefresh(); } } catch (e) { console.error(e); }
+  await loadCatalog();
 });
 onBeforeUnmount(() => { 
     cancelAnimationFrame(arrowFrame); if (panelAnimationRaf) cancelAnimationFrame(panelAnimationRaf);
     unsubscribeRatings?.();
-    resizeObserver?.disconnect(); window.removeEventListener('keydown', handleEscape); window.removeEventListener('click', closeDropdown); window.removeEventListener('resize', scheduleArrowRefresh); 
+    resizeObserver?.disconnect(); window.removeEventListener('keydown', handleEscape); window.removeEventListener('click', closeDropdown); window.removeEventListener('resize', scheduleArrowRefresh);
+    // Drag handlers live on `window` for the duration of a resize; unmounting mid-drag
+    // would otherwise leave them attached and firing against a dead component.
+    stopLeftResize(); stopRightResize(); setupScrollSync(false);
 });
 </script>
 
