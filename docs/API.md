@@ -19,9 +19,10 @@ Every response is JSON and wrapped in a consistent envelope:
 { "ok": false, "error": "message" }
 ```
 
-Responses are cached at the CDN edge (~5 min). Course data updates when the
-upstream catalog updates; the `version` and `lastUpdated` fields tell you which
-catalog version you got.
+`GET` responses are cached at the CDN edge (~5 min). `POST` responses
+(`/api/validate`, `/api/availability`) depend entirely on the request body and are
+sent with `Cache-Control: no-store`. Course data updates when the upstream catalog
+updates; the `version` and `lastUpdated` fields tell you which catalog version you got.
 
 ---
 
@@ -194,12 +195,27 @@ Validate a course plan with the same solver the site uses.
       "sourceCourseId": "...",
       "targetCourseId": "..."
     },
-    "selectedCount": 2
+    "selectedCount": 2,
+    "impliedCourses": ["S1MATH00"],
+    "resolvedPlan": ["S1MATH00", "S1MATH01", "S1ENG01"]
   }
 }
 ```
 `failure` is a recursive tree — nested `causes` explain chains like dead ends,
 group conflicts, cycles, and track locks.
+
+**Important — `valid: true` does not mean `selected` is complete.** The solver
+resolves a plan by pulling in whatever prerequisites the chosen courses need, so a
+plan listing only a Grade 10 course validates even though its Grade 9 prerequisite
+is missing from `selected`.
+
+- `impliedCourses` — courses the plan requires but `selected` did not list.
+- `resolvedPlan` — the full set of courses the plan entails (`selected` plus
+  `impliedCourses`, with move-up targets substituted for their sources).
+
+If you are building a schedule rather than just checking one, use `resolvedPlan`.
+Both fields are empty when `valid` is `false`. The website itself adds
+`impliedCourses` to the student's selection as soon as they pick a course.
 
 ### `POST /api/availability`
 Availability of **every** course given a partial plan — perfect for building your
@@ -220,7 +236,8 @@ own interactive picker on top of our data. Same body as `/api/validate`
 
 ## CORS, rate limits, fair use
 
-- **CORS:** all endpoints send `Access-Control-Allow-Origin: *`, so browsers can call them directly from any origin.
+- **CORS:** all endpoints send `Access-Control-Allow-Origin: *`, so browsers can call them directly from any origin. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
+- **Request bodies:** the `POST` endpoints accept a JSON object body. Sending `Content-Type: application/json` is recommended; a raw JSON string body is also parsed. A body that isn't a JSON object returns `400` rather than being treated as an empty plan.
 - **Auth:** none. Please don't hammer it — Vercel's standard limits apply. Cache responses on your side where you can.
 - **Freshness:** catalog data is mirrored from the upstream source and cached ~5 minutes; check `version`/`lastUpdated` in `/api/meta`.
 
