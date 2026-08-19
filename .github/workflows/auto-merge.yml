@@ -1,0 +1,77 @@
+# Auto-merge to main
+#
+# Every push to a non-main branch is built, and lands on main automatically if
+# the build is green. A red build stops the merge and leaves the branch alone.
+#
+# Escape hatch: put [skip automerge] anywhere in the commit message to push a
+# branch without it flowing to main.
+
+name: Auto-merge to main
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+concurrency:
+  # One merge attempt per branch; a newer push supersedes an in-flight one.
+  group: auto-merge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-merge:
+    if: ${{ !contains(github.event.head_commit.message, '[skip automerge]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` runs vue-tsc type-check and the production build, so a
+      # type error or broken import fails here instead of on main.
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Merge into main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          branch="${GITHUB_REF_NAME}"
+          short="${GITHUB_SHA::7}"
+
+          # main can move while the build runs, so re-fetch and retry the push.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout -B main origin/main
+
+            if ! git merge --no-ff "${GITHUB_SHA}" -m "Auto-merge ${branch} (${short})"; then
+              git merge --abort || true
+              echo "::error::${branch} conflicts with main. Resolve it locally and push again."
+              exit 1
+            fi
+
+            if git push origin main; then
+              echo "Merged ${branch} (${short}) into main."
+              exit 0
+            fi
+
+            echo "main moved during attempt ${attempt}; retrying."
+            sleep 5
+          done
+
+          echo "::error::Could not push to main after 3 attempts."
+          exit 1
