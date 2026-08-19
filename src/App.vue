@@ -111,7 +111,7 @@
                 <div v-for="course in getCourses(dept, grade)" :key="course.id" class="relative group" @mouseenter="hoveredCourseId = course.id; checkTooltipOnEnter(course.id)" @mouseleave="hoveredCourseId = null; hideTooltip()">
                   <button :ref="el => setCourseCardRef(course.id, el as Element | null)" type="button" @click="handleCourseClick(course.id)" :class="[uiConfig.cardBase, getCardStyles(course.id)]">
                     <div class="pr-1 flex-1 flex items-center"><h3 class="font-semibold tracking-tight text-[13px] leading-snug">{{ viewState[course.id]?.name || course.raw.name }}</h3></div>
-                    <div v-if="course.raw.crowdRating" class="w-full h-[3px] bg-black/5 dark:bg-white/10 rounded-full overflow-hidden mt-1"><div class="h-full transition-all duration-0" :class="viewState[course.id]?.status === 'selected' ? 'bg-white/40' : 'bg-black/20 dark:bg-white/30'" :style="{ width: `${(course.raw.crowdRating / 10) * 100}%` }"></div></div>
+                    <div v-if="ratingOf(course.id).value" class="w-full h-[3px] bg-black/5 dark:bg-white/10 rounded-full overflow-hidden mt-1"><div class="h-full transition-all duration-0" :class="viewState[course.id]?.status === 'selected' ? 'bg-white/40' : 'bg-black/20 dark:bg-white/30'" :style="{ width: `${(ratingOf(course.id).value / 10) * 100}%` }"></div></div>
                   </button>
                   <div class="absolute right-[6px] top-[6px] flex flex-col gap-[6px] z-20">
                     <button type="button" @click.stop="openCourseInfo(course.id)" :class="[uiConfig.iconBtn, getInfoBtnStyles(course.id)]">
@@ -190,8 +190,34 @@
             </div>
             <h2 class="text-lg font-semibold tracking-tight text-black dark:text-white leading-tight mb-5 pr-8">{{ activeVm?.name || activeRaw?.raw.name }}</h2>
             <div class="mb-5 rounded-[12px] border border-black/5 dark:border-white/5 p-3 bg-white/50 dark:bg-white/5 shadow-sm">
-              <div class="flex justify-between items-end mb-2"><div><div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93]">Crowd Rating</div><div class="text-xl font-bold text-black dark:text-white">{{ formatRating(activeRaw?.raw.crowdRating) }}<span class="text-[10px] font-medium opacity-40 ml-0.5">/ 10</span></div></div></div>
-              <div class="h-1.5 w-full bg-black/5 dark:bg-black/40 rounded-full overflow-hidden"><div class="h-full bg-[#34C759]" :style="{ width: `${((activeRaw?.raw.crowdRating || 0) / 10) * 100}%` }"></div></div>
+              <div class="flex justify-between items-end mb-2">
+                <div><div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93]">Crowd Rating</div><div class="text-xl font-bold text-black dark:text-white">{{ formatRating(activeRating.value) }}<span class="text-[10px] font-medium opacity-40 ml-0.5">/ 10</span></div></div>
+                <div class="text-[9px] font-medium text-[#8E8E93] pb-1">{{ activeRating.voteCount === 1 ? '1 student vote' : `${activeRating.voteCount} student votes` }}</div>
+              </div>
+              <div class="h-1.5 w-full bg-black/5 dark:bg-black/40 rounded-full overflow-hidden"><div class="h-full bg-[#34C759] transition-[width] duration-300" :style="{ width: `${(activeRating.value / 10) * 100}%` }"></div></div>
+
+              <!-- Voting: one vote per course, per person. Locks once cast. -->
+              <div class="mt-3 pt-3 border-t border-black/5 dark:border-white/10">
+                <div v-if="activeRating.myVote !== null" class="flex items-center gap-1.5 text-[10px] font-semibold text-[#34C759]">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                  You rated this {{ activeRating.myVote }} / 10
+                </div>
+                <div v-else>
+                  <div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93] mb-1.5">Rate this course</div>
+                  <div class="grid grid-cols-10 gap-[3px]">
+                    <button
+                      v-for="n in 10" :key="n" type="button"
+                      :disabled="isSubmittingVote"
+                      @click.stop="submitVote(viewingCourseId!, n)"
+                      @mouseenter="hoveredVote = n" @mouseleave="hoveredVote = 0"
+                      class="h-6 rounded-[5px] text-[9px] font-bold transition-colors duration-0 disabled:opacity-40"
+                      :class="n <= hoveredVote ? 'bg-[#34C759] text-white' : 'bg-black/5 dark:bg-white/10 text-[#8E8E93] hover:bg-black/10 dark:hover:bg-white/20'"
+                    >{{ n }}</button>
+                  </div>
+                  <div class="text-[9px] text-[#8E8E93] mt-1.5 leading-tight">Anonymous, and you can only vote once per course.</div>
+                </div>
+                <div v-if="voteError" class="text-[9px] text-[#FF3B30] mt-1.5 font-medium">{{ voteError }}</div>
+              </div>
             </div>
             <div v-if="activeVm?.isMoveUpTarget" class="mb-5 py-2 px-3 rounded-lg border bg-[#FF9500]/10 border-[#FF9500]/30 text-[#FF9500] dark:text-[#FF9F0A]"><div class="text-[9px] font-bold uppercase tracking-widest opacity-80">Accelerated path</div><div class="font-medium text-[11px] mt-0.5 leading-tight">Moved up from {{ getCourseName(activeVm.moveUpSourceId) }}</div></div>
             <div v-else-if="activeVm?.isMoveUpSource" class="mb-5 p-1 rounded-[12px] border bg-orange-50 border-orange-200 dark:bg-orange-900/30 dark:border-orange-500/50 text-orange-700 dark:text-orange-400">
@@ -283,6 +309,8 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { CourseSelectionController } from './backend/Controller';
 import { Updater } from './backend/Updater';
+import { RatingStore } from './backend/RatingStore';
+import type { EffectiveRating } from './backend/RatingStore';
 import type { CourseModel, CourseNode } from './backend/CourseModel';
 import type { CourseViewModel } from './backend/ViewModel';
 
@@ -314,6 +342,14 @@ const hoveredCourseId = ref<string | null>(null);
 const tooltip = ref<TooltipState>({ visible: false, text: '', theme: 'default' });
 const deptArrowPaths = ref<Record<string, ArrowPath[]>>({});
 const showExportDropdown = ref(false);
+
+// --- Crowd rating / voting ---
+const ratingStore = new RatingStore();
+const ratingsVersion = ref(0); // bumped by the store so computed ratings re-run
+const hoveredVote = ref(0);
+const isSubmittingVote = ref(false);
+const voteError = ref<string | null>(null);
+
 const isExporting = ref(false);
 const exportRef = ref<HTMLElement | null>(null);
 const mouseX = ref(0);
@@ -607,7 +643,7 @@ const handleToggleDept = (dept: string) => {
   executeMorph(selectedDept.value, newDept);
 };
 
-const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; viewingCourseId.value = courseId; };
+const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; viewingCourseId.value = courseId; hoveredVote.value = 0; voteError.value = null; };
 const openAboutPanel = () => { viewingCourseId.value = null; showAboutPanel.value = true; };
 
 const startMoveUp = (courseId: string) => { 
@@ -795,6 +831,38 @@ const getCardStyles = (courseId: string): string => {
 
 const formatRating = (val?: number) => val === undefined ? '0.00' : val.toFixed(2);
 
+const ratingOf = (courseId: string): EffectiveRating => {
+  ratingsVersion.value; // reactivity hook: re-evaluates whenever a vote lands
+  const baseline = courseMetaById.value.get(courseId)?.raw.crowdRating ?? 0;
+  return ratingStore.getEffectiveRating(courseId, baseline);
+};
+
+const activeRating = computed<EffectiveRating>(() =>
+  viewingCourseId.value
+    ? ratingOf(viewingCourseId.value)
+    : { value: 0, voteCount: 0, baseline: 0, myVote: null },
+);
+
+const submitVote = async (courseId: string, value: number) => {
+  if (isSubmittingVote.value || ratingStore.hasVoted(courseId)) return;
+  isSubmittingVote.value = true;
+  voteError.value = null;
+  try {
+    const result = await ratingStore.vote(courseId, value);
+    if (!result.ok) {
+      voteError.value = result.reason === 'already-voted'
+        ? 'You have already rated this course.'
+        : 'That rating is out of range.';
+    }
+  } catch (e) {
+    console.error(e);
+    voteError.value = 'Could not record your vote. Please try again.';
+  } finally {
+    isSubmittingVote.value = false;
+    hoveredVote.value = 0;
+  }
+};
+
 const getSummaryStyles = (courseId: string): string => { 
   const vm = viewState.value[courseId]; 
   let baseStyle = '';
@@ -871,14 +939,19 @@ const recomputeArrowPaths = () => {
 };
 const scheduleArrowRefresh = () => { cancelAnimationFrame(arrowFrame); arrowFrame = window.requestAnimationFrame(() => nextTick(recomputeArrowPaths)); };
 
+let unsubscribeRatings: (() => void) | null = null;
+
 onMounted(async () => {
   inject(); const pref = window.matchMedia('(prefers-color-scheme: dark)').matches; isDarkMode.value = pref; document.documentElement.classList.toggle('dark', pref);
   window.addEventListener('keydown', handleEscape); window.addEventListener('click', closeDropdown); window.addEventListener('resize', scheduleArrowRefresh);
   if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(scheduleArrowRefresh);
+  unsubscribeRatings = ratingStore.onChange(() => { ratingsVersion.value++; });
+  ratingStore.loadAggregates().then(() => ratingStore.flushPending());
   try { const data = await (new Updater()).initialize(); if (data) { catalogData.value = data; controller.value = new CourseSelectionController(data); controller.value.connectView(v => viewState.value = v); await nextTick(); setupScrollSync(selectedDept.value === null); scheduleArrowRefresh(); } } catch (e) { console.error(e); }
 });
 onBeforeUnmount(() => { 
     cancelAnimationFrame(arrowFrame); if (panelAnimationRaf) cancelAnimationFrame(panelAnimationRaf);
+    unsubscribeRatings?.();
     resizeObserver?.disconnect(); window.removeEventListener('keydown', handleEscape); window.removeEventListener('click', closeDropdown); window.removeEventListener('resize', scheduleArrowRefresh); 
 });
 </script>
