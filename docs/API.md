@@ -232,6 +232,85 @@ own interactive picker on top of our data. Same body as `/api/validate`
 }
 ```
 
+### `GET /api/ratings`
+Crowd rating tallies for every course that has received at least one student vote.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "persistent": true,
+    "scale": { "min": 1, "max": 10 },
+    "ratings": [
+      { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 }
+    ]
+  }
+}
+```
+
+`persistent` is `false` when the deployment has no KV credentials configured; in
+that mode tallies live in the function's memory and are lost on a cold start.
+
+### `GET /api/ratings/:id`
+Tallies for one course. Add `?voterId=` to also get that voter's own ballot back
+(`yourVote` is `null` if they haven't voted).
+
+```json
+{
+  "ok": true,
+  "data": {
+    "courseId": "BIO109E010",
+    "baseline": 8.5,
+    "aggregate": { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 },
+    "yourVote": 9
+  }
+}
+```
+
+`baseline` is the catalog's own `crowdRating`. The website blends it with the
+live votes as a prior worth 5 votes, so a course with two ballots doesn't swing
+wildly:
+
+```
+displayed = (baseline * 5 + sum) / (5 + count)
+```
+
+### `POST /api/ratings`
+Cast **one** vote. Each `voterId` may vote once per course — a repeat vote is
+rejected rather than replacing or double-counting the first one.
+
+**Body**
+```json
+{ "courseId": "BIO109E010", "value": 9, "voterId": "anon-token" }
+```
+
+- `value` — integer, 1 to 10.
+- `voterId` — any stable, caller-generated token (the website uses an anonymous
+  random id kept in `localStorage`). It is stored as a ballot key only.
+
+**Response `200`** — the vote was recorded:
+```json
+{
+  "ok": true,
+  "data": {
+    "accepted": true,
+    "yourVote": 9,
+    "aggregate": { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 },
+    "baseline": 8.5
+  }
+}
+```
+
+**Response `409`** — this voter already rated the course. Nothing changed; the
+body reports the vote that stands:
+```json
+{
+  "ok": false,
+  "error": "You have already rated this course",
+  "data": { "accepted": false, "yourVote": 9, "aggregate": { "...": "..." } }
+}
+```
+
 ---
 
 ## CORS, rate limits, fair use
@@ -248,6 +327,7 @@ own interactive picker on top of our data. Same body as `/api/validate`
 | 400 | Bad request (missing/invalid params or body) |
 | 404 | Resource not found (e.g. unknown course id) |
 | 405 | Wrong HTTP method |
+| 409 | Duplicate vote — this `voterId` already rated this course |
 | 502 | Upstream catalog fetch failed — retry shortly |
 
 All errors use the `{ "ok": false, "error": "..." }` envelope.

@@ -16,6 +16,9 @@
 //   GET  /api/departments         departments + counts
 //   POST /api/validate            validate a plan { selected, moveUps }
 //   POST /api/availability        availability map for a plan { selected, moveUps }
+//   GET  /api/ratings             crowd rating tallies for every rated course
+//   GET  /api/ratings/:id         tallies for one course (?voterId= to see your vote)
+//   POST /api/ratings             cast one vote { courseId, value, voterId } — one per voter
 
 // ---------------------------------------------------------------- types ----
 
@@ -555,6 +558,145 @@ class CatalogSolver {
     }
 }
 
+// ------------------------------------------------------ rating store ------
+//
+// One vote per voter per course. The voter id is an anonymous, client-generated
+// token; the ballot key (`ratevote:<course>:<voter>`) is written with SET NX, so
+// a second vote from the same token is rejected by the store itself rather than
+// by a read-then-write race.
+//
+// Persistence uses the Upstash / Vercel KV REST API when the environment
+// provides credentials. Without them the process falls back to an in-memory
+// tally, which is per-instance and does NOT survive a cold start — fine for
+// local dev, not for production. GET /api/ratings reports which one is live.
+
+const RATING_MIN = 1;
+const RATING_MAX = 10;
+
+const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const KV_ENABLED = !!(KV_URL && KV_TOKEN);
+
+const BALLOT_KEY = (courseId: string, voterId: string) => `ratevote:${courseId}:${voterId}`;
+const TALLY_KEY = (courseId: string) => `ratetally:${courseId}`;
+const INDEX_KEY = "ratecourses";
+
+interface RatingAggregate {
+    courseId: string;
+    sum: number;
+    count: number;
+    average: number;
+}
+
+// In-memory fallback.
+const memBallots = new Map<string, number>();
+const memTallies = new Map<string, { sum: number; count: number }>();
+
+async function kv(commands: (string | number)[][]): Promise<any[]> {
+    const response = await fetch(`${KV_URL.replace(/\/$/, "")}/pipeline`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${KV_TOKEN}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(commands),
+    });
+    if (!response.ok) {
+        throw new Error(`Rating store unavailable (${response.status})`);
+    }
+    const rows = (await response.json()) as any[];
+    const failed = rows.find((r) => r && r.error);
+    if (failed) throw new Error(`Rating store error: ${failed.error}`);
+    return rows.map((r) => (r ? r.result : null));
+}
+
+function makeAggregate(courseId: string, sum: number, count: number): RatingAggregate {
+    return { courseId, sum, count, average: count > 0 ? sum / count : 0 };
+}
+
+async function readTally(courseId: string): Promise<RatingAggregate> {
+    if (!KV_ENABLED) {
+        const t = memTallies.get(courseId);
+        return makeAggregate(courseId, t?.sum ?? 0, t?.count ?? 0);
+    }
+    const [raw] = await kv([["HMGET", TALLY_KEY(courseId), "sum", "count"]]);
+    const sum = Number(Array.isArray(raw) ? raw[0] : 0) || 0;
+    const count = Number(Array.isArray(raw) ? raw[1] : 0) || 0;
+    return makeAggregate(courseId, sum, count);
+}
+
+async function readVoterBallot(courseId: string, voterId: string): Promise<number | null> {
+    if (!KV_ENABLED) {
+        const v = memBallots.get(BALLOT_KEY(courseId, voterId));
+        return typeof v === "number" ? v : null;
+    }
+    const [raw] = await kv([["GET", BALLOT_KEY(courseId, voterId)]]);
+    const value = Number(raw);
+    return Number.isFinite(value) && raw !== null ? value : null;
+}
+
+async function listTallies(): Promise<RatingAggregate[]> {
+    if (!KV_ENABLED) {
+        return Array.from(memTallies.entries()).map(([courseId, t]) =>
+            makeAggregate(courseId, t.sum, t.count),
+        );
+    }
+    const [ids] = await kv([["SMEMBERS", INDEX_KEY]]);
+    const courseIds: string[] = Array.isArray(ids) ? ids : [];
+    if (courseIds.length === 0) return [];
+    const rows = await kv(courseIds.map((id) => ["HMGET", TALLY_KEY(id), "sum", "count"]));
+    return courseIds.map((id, i) => {
+        const raw = rows[i];
+        const sum = Number(Array.isArray(raw) ? raw[0] : 0) || 0;
+        const count = Number(Array.isArray(raw) ? raw[1] : 0) || 0;
+        return makeAggregate(id, sum, count);
+    });
+}
+
+/**
+ * Record a vote. `accepted` is false when this voter already rated the course —
+ * the stored ballot is returned untouched and no tally is moved.
+ */
+async function castVote(
+    courseId: string,
+    voterId: string,
+    value: number,
+): Promise<{ accepted: boolean; yourVote: number; aggregate: RatingAggregate }> {
+    if (!KV_ENABLED) {
+        const key = BALLOT_KEY(courseId, voterId);
+        const existing = memBallots.get(key);
+        if (typeof existing === "number") {
+            return { accepted: false, yourVote: existing, aggregate: await readTally(courseId) };
+        }
+        memBallots.set(key, value);
+        const tally = memTallies.get(courseId) ?? { sum: 0, count: 0 };
+        tally.sum += value;
+        tally.count += 1;
+        memTallies.set(courseId, tally);
+        return { accepted: true, yourVote: value, aggregate: makeAggregate(courseId, tally.sum, tally.count) };
+    }
+
+    // SET NX is the dedupe primitive: only the first ballot from this voter wins.
+    const [claimed] = await kv([["SET", BALLOT_KEY(courseId, voterId), value, "NX"]]);
+    if (claimed !== "OK") {
+        const existing = await readVoterBallot(courseId, voterId);
+        return {
+            accepted: false,
+            yourVote: existing ?? value,
+            aggregate: await readTally(courseId),
+        };
+    }
+
+    const results = await kv([
+        ["SADD", INDEX_KEY, courseId],
+        ["HINCRBY", TALLY_KEY(courseId), "sum", value],
+        ["HINCRBY", TALLY_KEY(courseId), "count", 1],
+    ]);
+    const sum = Number(results[1]) || 0;
+    const count = Number(results[2]) || 0;
+    return { accepted: true, yourVote: value, aggregate: makeAggregate(courseId, sum, count) };
+}
+
 // ------------------------------------------------------ http helpers ------
 
 function withCors(res: any, methods = "GET, POST, OPTIONS") {
@@ -575,8 +717,8 @@ function okUncached(res: any, data: unknown) {
     return res.status(200).json({ ok: true, data });
 }
 
-function fail(res: any, status: number, message: string) {
-    if (status === 405) res.setHeader("Allow", "POST, OPTIONS");
+function fail(res: any, status: number, message: string, allow = "POST, OPTIONS") {
+    if (status === 405) res.setHeader("Allow", allow);
     return res.status(status).json({ ok: false, error: message });
 }
 
@@ -664,6 +806,9 @@ export default async function handler(req: any, res: any) {
                     "GET  /api/departments  — departments with course counts",
                     "POST /api/validate     — validate a course plan; body: { \"selected\": [...ids], \"moveUps\": { \"srcId\": \"targetId\" } }",
                     "POST /api/availability — availability state for every course given a plan; same body as /api/validate",
+                    "GET  /api/ratings      — crowd rating tallies for every rated course",
+                    "GET  /api/ratings/:id  — tallies for one course; ?voterId= also returns your own vote",
+                    "POST /api/ratings      — cast one vote; body: { \"courseId\": \"...\", \"value\": 1-10, \"voterId\": \"...\" }",
                 ],
             });
         }
@@ -813,6 +958,76 @@ export default async function handler(req: any, res: any) {
             const solver = new CatalogSolver(catalog);
             solver.setSelected(plan.selected, plan.moveUps);
             return okUncached(res, solver.evaluateGraph());
+        }
+
+        if (route === "ratings" || route.startsWith("ratings/")) {
+            const courseIdFromPath = segments[1] ? decodeURIComponent(segments[1]) : "";
+
+            if (req.method === "POST") {
+                const body = req.body ?? {};
+                const courseId = typeof body.courseId === "string" ? body.courseId.trim() : courseIdFromPath;
+                const voterId = typeof body.voterId === "string" ? body.voterId.trim() : "";
+                const value = Math.round(Number(body.value));
+
+                if (!courseId) return fail(res, 400, "Missing courseId");
+                if (!voterId) return fail(res, 400, "Missing voterId");
+                if (!Number.isFinite(value) || value < RATING_MIN || value > RATING_MAX) {
+                    return fail(res, 400, `value must be an integer between ${RATING_MIN} and ${RATING_MAX}`);
+                }
+
+                const catalog = await getCatalog();
+                const course = flattenCourses(catalog).find(
+                    (c) => c.id.toLowerCase() === courseId.toLowerCase(),
+                );
+                if (!course) return fail(res, 404, `Course not found: ${courseId}`);
+
+                const result = await castVote(course.id, voterId, value);
+                res.setHeader("Cache-Control", "no-store");
+                // 409 means "you already voted" — the caller keeps its local lock
+                // and shows the vote that stands, rather than double counting.
+                return res.status(result.accepted ? 200 : 409).json({
+                    ok: result.accepted,
+                    error: result.accepted ? undefined : "You have already rated this course",
+                    data: {
+                        accepted: result.accepted,
+                        yourVote: result.yourVote,
+                        aggregate: result.aggregate,
+                        baseline: Number(course.crowdRating) || 0,
+                    },
+                });
+            }
+
+            if (req.method !== "GET") {
+                return fail(res, 405, "Use GET to read ratings or POST to cast a vote", "GET, POST, OPTIONS");
+            }
+
+            res.setHeader("Cache-Control", "no-store");
+            if (courseIdFromPath) {
+                const catalog = await getCatalog();
+                const course = flattenCourses(catalog).find(
+                    (c) => c.id.toLowerCase() === courseIdFromPath.toLowerCase(),
+                );
+                if (!course) return fail(res, 404, `Course not found: ${courseIdFromPath}`);
+                const voterId = typeof q.voterId === "string" ? q.voterId : "";
+                return res.status(200).json({
+                    ok: true,
+                    data: {
+                        courseId: course.id,
+                        baseline: Number(course.crowdRating) || 0,
+                        aggregate: await readTally(course.id),
+                        yourVote: voterId ? await readVoterBallot(course.id, voterId) : null,
+                    },
+                });
+            }
+
+            return res.status(200).json({
+                ok: true,
+                data: {
+                    persistent: KV_ENABLED,
+                    scale: { min: RATING_MIN, max: RATING_MAX },
+                    ratings: await listTallies(),
+                },
+            });
         }
 
         return fail(res, 404, `Unknown endpoint: /api/${route}. GET /api lists all endpoints.`);
