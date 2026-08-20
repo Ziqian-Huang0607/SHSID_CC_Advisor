@@ -258,7 +258,7 @@
             <div class="flex flex-col items-center flex-1 pb-6 mt-8">
               <img src="/cc-icon.png" class="w-32 h-32 shrink-0 object-contain mx-auto drop-shadow-sm mb-6 pointer-events-none" draggable="false" alt="Icon" />
               <h2 class="text-[20px] font-bold tracking-tight text-center text-black dark:text-white leading-tight mb-1.5">SHSID Interactive Course Catalog</h2>
-              <p class="text-center text-[#8E8E93] dark:text-[#98989D] font-medium text-[13px] mb-6">Frontend version {{ APP_VERSION }}</p>
+              <p class="text-center text-[#8E8E93] dark:text-[#98989D] font-medium text-[13px] mb-6">Frontend version {{ APP_VERSION }} — updated {{ APP_UPDATED }}</p>
               <div class="w-full bg-[#007AFF]/5 border border-[#007AFF]/20 dark:bg-[#007AFF]/10 dark:border-[#007AFF]/30 p-4 rounded-xl text-black dark:text-white text-[13px] space-y-3 shadow-sm leading-relaxed my-4">Maintainer, prototypes, concepts: <a href="https://github.com/ziqian-huang0607" target="_blank" class="font-semibold text-[#007AFF] hover:underline underline-offset-2">Ziqian Huang</a><br>Backend, UI designs, course content: <a href="https://github.com/willuhd" target="_blank" class="font-semibold text-[#007AFF] hover:underline underline-offset-2">Will Chen</a></div>
               <div class="w-full bg-[#FF9500]/5 border border-[#FF9500]/20 dark:bg-[#FF9500]/10 dark:border-[#FF9500]/30 p-4 rounded-xl text-black dark:text-white text-[13px] shadow-sm leading-relaxed my-4"><strong>⚠️ Disclaimer:</strong> {{ DISCLAIMER }}</div>
               <p class="text-center font-semibold text-black dark:text-white text-[13px] mt-6 mb-5">Built by Ziqian Huang and Will Chen — Indexademics team and Data Science club</p>
@@ -281,7 +281,7 @@
             </div>
           </div>
           <div class="text-right flex flex-col gap-0.5 text-[11px] font-normal text-gray-500 tracking-normal">
-            <div>Frontend: {{ APP_VERSION }}</div>
+            <div>Frontend: {{ APP_VERSION }} ({{ APP_UPDATED }})</div>
             <div>Backend: {{ catalogData?.version }}</div>
             <div>Updated on: {{ catalogData?.lastUpdated }}</div>
             <div>Generated: {{ new Date().toLocaleDateString() }}</div>
@@ -335,7 +335,8 @@ import type { EffectiveRating } from './backend/RatingStore';
 import type { CourseModel, CourseNode } from './backend/CourseModel';
 import type { CourseViewModel } from './backend/ViewModel';
 
-const APP_VERSION = "v0.3, revision 23";
+const APP_VERSION = "v1.0";
+const APP_UPDATED = "Aug 20, 2026";
 const DISCLAIMER = "This is an unofficial tool and isn't affiliated with SHSID. All content derived from the Course Catalog and is for internal reference purposes only. Course availability and policies are subject to change by the school administration. Please schedule a meeting with your homeroom teacher for accurate results!";
 
 interface CourseMeta { id: string; dept: string; grade: string; raw: CourseNode; searchText: string; }
