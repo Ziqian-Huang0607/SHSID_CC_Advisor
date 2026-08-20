@@ -11,6 +11,8 @@
     "type-check": "vue-tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:api": "node scripts/api-smoke.mjs",
+    "api": "node scripts/api-harness.mjs",
     "verify": "npm run type-check && npm run test && npm run build-only"
   },
   "dependencies": {

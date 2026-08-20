@@ -16,9 +16,10 @@
 //   GET  /api/departments         departments + counts
 //   POST /api/validate            validate a plan { selected, moveUps }
 //   POST /api/availability        availability map for a plan { selected, moveUps }
-//   GET  /api/ratings             crowd rating tallies for every rated course
+//   GET  /api/ratings             crowd rating tallies (?voterId= also returns your own ballots)
 //   GET  /api/ratings/:id         tallies for one course (?voterId= to see your vote)
-//   POST /api/ratings             cast one vote { courseId, value, voterId } — one per voter
+//   POST /api/ratings             cast or change your vote { courseId, value, voterId }
+//   GET  /api/description/:id     third-party course summary (?refresh=1 to bypass the cache)
 
 // ---------------------------------------------------------------- types ----
 
@@ -560,10 +561,15 @@ class CatalogSolver {
 
 // ------------------------------------------------------ rating store ------
 //
-// One vote per voter per course. The voter id is an anonymous, client-generated
-// token; the ballot key (`ratevote:<course>:<voter>`) is written with SET NX, so
-// a second vote from the same token is rejected by the store itself rather than
-// by a read-then-write race.
+// One ballot per voter per course, and that ballot is editable: a voter who
+// comes back can move their 7 to a 9. Changing a ballot shifts the tally sum by
+// the delta and leaves the count alone — it is still one student's opinion, so
+// the course must not gain a second "student vote" for it.
+//
+// Voter identity is a durable anonymous token (see resolveVoter below). The
+// ballot key is `ratevote:<course>:<voter>`; first write claims it with SET NX
+// so a genuinely new vote can never be double counted by a read-then-write
+// race, and later edits swap it with GETSET so the delta is read atomically.
 //
 // Persistence uses the Upstash / Vercel KV REST API when the environment
 // provides credentials. Without them the process falls back to an in-memory
@@ -653,57 +659,596 @@ async function listTallies(): Promise<RatingAggregate[]> {
     });
 }
 
+export type BallotOutcome = "created" | "changed" | "unchanged";
+
 /**
- * Record a vote. `accepted` is false when this voter already rated the course —
- * the stored ballot is returned untouched and no tally is moved.
+ * Record a vote, or move an existing one. A voter always owns exactly one
+ * ballot per course: the first write creates it and bumps `count`, every later
+ * write only shifts `sum` by the delta. That is what keeps "3 student votes"
+ * honest when one of those three students changes their mind twice.
  */
 async function castVote(
     courseId: string,
     voterId: string,
     value: number,
-): Promise<{ accepted: boolean; yourVote: number; aggregate: RatingAggregate }> {
+): Promise<{ outcome: BallotOutcome; yourVote: number; previousVote: number | null; aggregate: RatingAggregate }> {
     if (!KV_ENABLED) {
         const key = BALLOT_KEY(courseId, voterId);
         const existing = memBallots.get(key);
-        if (typeof existing === "number") {
-            return { accepted: false, yourVote: existing, aggregate: await readTally(courseId) };
-        }
-        memBallots.set(key, value);
         const tally = memTallies.get(courseId) ?? { sum: 0, count: 0 };
+
+        if (typeof existing === "number") {
+            if (existing === value) {
+                return { outcome: "unchanged", yourVote: value, previousVote: existing, aggregate: await readTally(courseId) };
+            }
+            memBallots.set(key, value);
+            tally.sum += value - existing;
+            memTallies.set(courseId, tally);
+            return {
+                outcome: "changed",
+                yourVote: value,
+                previousVote: existing,
+                aggregate: makeAggregate(courseId, tally.sum, tally.count),
+            };
+        }
+
+        memBallots.set(key, value);
         tally.sum += value;
         tally.count += 1;
         memTallies.set(courseId, tally);
-        return { accepted: true, yourVote: value, aggregate: makeAggregate(courseId, tally.sum, tally.count) };
-    }
-
-    // SET NX is the dedupe primitive: only the first ballot from this voter wins.
-    const [claimed] = await kv([["SET", BALLOT_KEY(courseId, voterId), value, "NX"]]);
-    if (claimed !== "OK") {
-        const existing = await readVoterBallot(courseId, voterId);
         return {
-            accepted: false,
-            yourVote: existing ?? value,
-            aggregate: await readTally(courseId),
+            outcome: "created",
+            yourVote: value,
+            previousVote: null,
+            aggregate: makeAggregate(courseId, tally.sum, tally.count),
         };
     }
 
+    // SET NX decides "is this a new ballot?" atomically, so two simultaneous
+    // first votes from one voter can never both bump the count.
+    const [claimed] = await kv([["SET", BALLOT_KEY(courseId, voterId), value, "NX"]]);
+    if (claimed === "OK") {
+        const results = await kv([
+            ["SADD", INDEX_KEY, courseId],
+            ["HINCRBY", TALLY_KEY(courseId), "sum", value],
+            ["HINCRBY", TALLY_KEY(courseId), "count", 1],
+        ]);
+        return {
+            outcome: "created",
+            yourVote: value,
+            previousVote: null,
+            aggregate: makeAggregate(courseId, Number(results[1]) || 0, Number(results[2]) || 0),
+        };
+    }
+
+    // The ballot exists. GETSET swaps in the new value and hands back the old
+    // one in a single command, so the delta can't be computed from a stale read.
+    const [rawPrevious] = await kv([["GETSET", BALLOT_KEY(courseId, voterId), value]]);
+    const previous = Number(rawPrevious);
+    if (!Number.isFinite(previous) || rawPrevious === null) {
+        // The ballot expired between the two commands; treat it as a fresh one.
+        const results = await kv([
+            ["SADD", INDEX_KEY, courseId],
+            ["HINCRBY", TALLY_KEY(courseId), "sum", value],
+            ["HINCRBY", TALLY_KEY(courseId), "count", 1],
+        ]);
+        return {
+            outcome: "created",
+            yourVote: value,
+            previousVote: null,
+            aggregate: makeAggregate(courseId, Number(results[1]) || 0, Number(results[2]) || 0),
+        };
+    }
+
+    if (previous === value) {
+        return { outcome: "unchanged", yourVote: value, previousVote: previous, aggregate: await readTally(courseId) };
+    }
+
+    // Only the sum moves. The count already includes this voter.
     const results = await kv([
-        ["SADD", INDEX_KEY, courseId],
-        ["HINCRBY", TALLY_KEY(courseId), "sum", value],
-        ["HINCRBY", TALLY_KEY(courseId), "count", 1],
+        ["HINCRBY", TALLY_KEY(courseId), "sum", value - previous],
+        ["HMGET", TALLY_KEY(courseId), "sum", "count"],
     ]);
-    const sum = Number(results[1]) || 0;
-    const count = Number(results[2]) || 0;
-    return { accepted: true, yourVote: value, aggregate: makeAggregate(courseId, sum, count) };
+    const row = results[1];
+    const count = Number(Array.isArray(row) ? row[1] : 0) || 0;
+    return {
+        outcome: "changed",
+        yourVote: value,
+        previousVote: previous,
+        aggregate: makeAggregate(courseId, Number(results[0]) || 0, count),
+    };
+}
+
+/** Every ballot this voter has on file, so a returning device restores its votes. */
+async function readVoterBallots(voterId: string, courseIds: string[]): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    if (!voterId || courseIds.length === 0) return out;
+
+    if (!KV_ENABLED) {
+        courseIds.forEach((id) => {
+            const v = memBallots.get(BALLOT_KEY(id, voterId));
+            if (typeof v === "number") out[id] = v;
+        });
+        return out;
+    }
+
+    const [values] = await kv([["MGET", ...courseIds.map((id) => BALLOT_KEY(id, voterId))]]);
+    const list: any[] = Array.isArray(values) ? values : [];
+    courseIds.forEach((id, i) => {
+        const v = Number(list[i]);
+        if (list[i] !== null && list[i] !== undefined && Number.isFinite(v)) out[id] = v;
+    });
+    return out;
+}
+
+// -------------------------------------------------- course summaries ------
+//
+// GET /api/description/:courseId returns a human-readable summary of a course.
+// The text itself comes from a third-party service you point the API at — this
+// file only defines the contract, calls it, caches it, and normalises whatever
+// comes back. See docs/input.md for the wiring instructions.
+//
+//   DESCRIPTION_API_URL          the service endpoint (absent = feature off)
+//   DESCRIPTION_API_KEY          optional credential
+//   DESCRIPTION_API_AUTH_HEADER  header to send it in (default Authorization)
+//   DESCRIPTION_API_TIMEOUT_MS   per-request deadline (default 8000)
+//   DESCRIPTION_CACHE_TTL_S      how long a summary is reused (default 7 days)
+//
+// With no URL configured the endpoint still answers 200, falling back to the
+// catalog's own description — a page that renders summaries never goes blank
+// just because the provider isn't wired up yet.
+
+const DESCRIPTION_URL = process.env.DESCRIPTION_API_URL || "";
+const DESCRIPTION_KEY = process.env.DESCRIPTION_API_KEY || "";
+const DESCRIPTION_AUTH_HEADER = process.env.DESCRIPTION_API_AUTH_HEADER || "Authorization";
+const DESCRIPTION_TIMEOUT_MS = Number(process.env.DESCRIPTION_API_TIMEOUT_MS) || 8000;
+const DESCRIPTION_TTL_S = Number(process.env.DESCRIPTION_CACHE_TTL_S) || 60 * 60 * 24 * 7;
+const DESCRIPTION_ENABLED = !!DESCRIPTION_URL;
+
+const DESCRIPTION_KEY_OF = (courseId: string) => `ratedesc:v1:${courseId}`;
+
+interface CourseSummary {
+    courseId: string;
+    name: string;
+    summary: string;
+    highlights: string[];
+    workload: string;
+    bestFor: string;
+    difficulty: string;
+    provider: string;
+    model: string;
+    generatedAt: string;
+    /** True when this is the catalog's own text, not a generated summary. */
+    fallback: boolean;
+}
+
+const memSummaries = new Map<string, { value: CourseSummary; expiresAt: number }>();
+
+function asText(value: unknown): string {
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    return "";
+}
+
+function asTextList(value: unknown): string[] {
+    if (Array.isArray(value)) return value.map(asText).filter(Boolean).slice(0, 8);
+    const single = asText(value);
+    return single ? [single] : [];
+}
+
+/**
+ * Pull our shape out of whatever the provider returned. Providers wrap their
+ * payloads differently (`{...}`, `{ data: {...} }`, `{ result: {...} }`, or a
+ * bare string), so unwrap before reading rather than demanding one envelope.
+ */
+function normaliseSummary(course: FlatCourse, raw: any, provider: string): CourseSummary | null {
+    let payload = raw;
+    if (typeof payload === "string") payload = { summary: payload };
+    if (payload && typeof payload === "object") {
+        if (payload.data && typeof payload.data === "object") payload = payload.data;
+        else if (payload.result && typeof payload.result === "object") payload = payload.result;
+    }
+    if (!payload || typeof payload !== "object") return null;
+
+    const summary = asText(payload.summary) || asText(payload.text) || asText(payload.content) || asText(payload.description);
+    if (!summary) return null;
+
+    return {
+        courseId: course.id,
+        name: asText(course.name) || course.id,
+        summary,
+        highlights: asTextList(payload.highlights ?? payload.bullets ?? payload.points),
+        workload: asText(payload.workload),
+        bestFor: asText(payload.bestFor ?? payload.best_for ?? payload.audience),
+        difficulty: asText(payload.difficulty),
+        provider,
+        model: asText(payload.model),
+        generatedAt: new Date().toISOString(),
+        fallback: false,
+    };
+}
+
+/** The catalog's own words, used when no provider is configured or it fails. */
+function catalogSummary(course: FlatCourse): CourseSummary {
+    const review = asText(course.crowdReview);
+    return {
+        courseId: course.id,
+        name: asText(course.name) || course.id,
+        summary: asText(course.description) || "No description on file for this course yet.",
+        highlights: review ? [review] : [],
+        workload: "",
+        bestFor: "",
+        difficulty: asText(course.level),
+        provider: "catalog",
+        model: "",
+        generatedAt: new Date().toISOString(),
+        fallback: true,
+    };
+}
+
+async function readCachedSummary(courseId: string): Promise<CourseSummary | null> {
+    if (!KV_ENABLED) {
+        const hit = memSummaries.get(courseId);
+        if (hit && hit.expiresAt > Date.now()) return hit.value;
+        if (hit) memSummaries.delete(courseId);
+        return null;
+    }
+    try {
+        const [raw] = await kv([["GET", DESCRIPTION_KEY_OF(courseId)]]);
+        if (typeof raw !== "string" || !raw) return null;
+        return JSON.parse(raw) as CourseSummary;
+    } catch {
+        return null; // a broken cache entry must not break the endpoint
+    }
+}
+
+async function writeCachedSummary(summary: CourseSummary): Promise<void> {
+    if (!KV_ENABLED) {
+        memSummaries.set(summary.courseId, {
+            value: summary,
+            expiresAt: Date.now() + DESCRIPTION_TTL_S * 1000,
+        });
+        return;
+    }
+    try {
+        await kv([["SET", DESCRIPTION_KEY_OF(summary.courseId), JSON.stringify(summary), "EX", DESCRIPTION_TTL_S]]);
+    } catch {
+        /* the summary is still returned; it just isn't reused */
+    }
+}
+
+/** The request body every provider receives. Documented in docs/input.md. */
+function describeRequest(course: FlatCourse, catalog: CourseModel, locale: string) {
+    return {
+        version: 1,
+        courseId: course.id,
+        name: asText(course.name) || course.id,
+        department: course.department,
+        grade: course.grade,
+        track: course.track,
+        level: asText(course.level),
+        catalogDescription: asText(course.description),
+        catalogReview: asText(course.crowdReview),
+        catalogRating: Number(course.crowdRating) || 0,
+        prerequisites: course.rules?.pre ?? [],
+        corequisites: course.rules?.current ?? [],
+        catalogVersion: catalog.version,
+        locale,
+    };
+}
+
+async function fetchSummary(course: FlatCourse, catalog: CourseModel, locale: string): Promise<CourseSummary> {
+    if (!DESCRIPTION_ENABLED) return catalogSummary(course);
+
+    const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
+    if (DESCRIPTION_KEY) {
+        headers[DESCRIPTION_AUTH_HEADER] =
+            DESCRIPTION_AUTH_HEADER.toLowerCase() === "authorization" ? `Bearer ${DESCRIPTION_KEY}` : DESCRIPTION_KEY;
+    }
+
+    // Without a deadline a hung provider holds the function open until the
+    // platform kills it, and the caller sees a timeout instead of a summary.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), DESCRIPTION_TIMEOUT_MS);
+    try {
+        const response = await fetch(DESCRIPTION_URL, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(describeRequest(course, catalog, locale)),
+            signal: abort.signal,
+        });
+        if (!response.ok) throw new Error(`Description provider returned ${response.status}`);
+
+        const text = await response.text();
+        let parsed: any = text;
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            /* a plain-text summary is acceptable */
+        }
+
+        const host = (() => {
+            try {
+                return new URL(DESCRIPTION_URL).host;
+            } catch {
+                return "provider";
+            }
+        })();
+
+        const summary = normaliseSummary(course, parsed, host);
+        if (!summary) throw new Error("Description provider returned no summary field");
+        return summary;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// --------------------------------------------------- voter identity ------
+//
+// The voter token is what stops one person's vote being counted twice, so it
+// has to outlive a page reload, a closed tab, and a new browser session. It
+// lives in two places at once:
+//
+//   1. an `ccvoter` cookie the server sets for a year — survives localStorage
+//      being cleared, and is sent automatically on every request;
+//   2. localStorage on the client — survives the cookie being cleared, and is
+//      echoed back in the request so the server can re-issue the same token.
+//
+// Whichever one survives restores the other, and the resolved id always comes
+// back in the response body so the client can store the authoritative value.
+// This is deliberately not a fingerprint: it identifies a browser profile, not
+// a person, and a determined re-voter can still clear both. That trade is the
+// point — the alternative is tracking students.
+
+const VOTER_COOKIE = "ccvoter";
+const VOTER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // one year
+const VOTER_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
+
+function readCookie(req: any, name: string): string {
+    const header = req.headers?.cookie;
+    if (typeof header !== "string" || !header) return "";
+    for (const part of header.split(";")) {
+        const eq = part.indexOf("=");
+        if (eq === -1) continue;
+        if (part.slice(0, eq).trim() !== name) continue;
+        try {
+            return decodeURIComponent(part.slice(eq + 1).trim());
+        } catch {
+            return part.slice(eq + 1).trim();
+        }
+    }
+    return "";
+}
+
+function newVoterId(): string {
+    try {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `v1-${crypto.randomUUID()}`;
+    } catch {
+        /* fall through to the arithmetic id */
+    }
+    return `v1-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
+/**
+ * Settle on one voter id for this request and make sure both stores hold it.
+ * The cookie wins when both are present and disagree: it is the one the client
+ * cannot silently rewrite, so it keeps a tampered localStorage value from
+ * minting a second ballot.
+ */
+function resolveVoter(req: any, res: any, claimed: unknown): string {
+    const fromCookie = readCookie(req, VOTER_COOKIE);
+    const fromClient = typeof claimed === "string" ? claimed.trim() : "";
+
+    const cookieOk = VOTER_ID_PATTERN.test(fromCookie);
+    const clientOk = VOTER_ID_PATTERN.test(fromClient);
+
+    const voterId = cookieOk ? fromCookie : clientOk ? fromClient : newVoterId();
+
+    // Re-set on every request so the year-long window slides forward for
+    // anyone who keeps using the site, instead of expiring mid-semester.
+    const cookie = [
+        `${VOTER_COOKIE}=${encodeURIComponent(voterId)}`,
+        "Path=/",
+        `Max-Age=${VOTER_COOKIE_MAX_AGE}`,
+        "SameSite=Lax",
+        "Secure",
+        "HttpOnly",
+    ].join("; ");
+    const existing = res.getHeader ? res.getHeader("Set-Cookie") : undefined;
+    const merged = Array.isArray(existing) ? [...existing, cookie] : existing ? [existing as string, cookie] : [cookie];
+    res.setHeader("Set-Cookie", merged);
+
+    return voterId;
+}
+
+// ------------------------------------------------- observability ----------
+//
+// One structured line per request, on stdout, where Vercel's log drain picks it
+// up. JSON rather than prose so it can be queried: filter by status, group by
+// route, chart p95 duration. No request bodies and no voter tokens are logged —
+// a log that identifies who voted what defeats the point of anonymous ballots.
+
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES) || 16 * 1024;
+
+/** Ids already written, so the finally-block doesn't log a request twice. */
+const loggedRequests = new Set<string>();
+
+function readRequestId(req: any): string {
+    const header = req.headers?.["x-request-id"] ?? req.headers?.["x-vercel-id"];
+    if (typeof header === "string" && header && header.length <= 200) return header;
+    try {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+    } catch {
+        /* fall through */
+    }
+    return `req-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
+/** Reject oversized bodies before parsing rather than after. */
+function isBodyWithinLimit(req: any): boolean {
+    const declared = Number(req.headers?.["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return false;
+    const body = req.body;
+    if (typeof body === "string" && body.length > MAX_BODY_BYTES) return false;
+    return true;
+}
+
+function logRequest(
+    req: any,
+    res: any,
+    info: { requestId: string; route: string; status: number; startedAt: number; error?: string },
+): void {
+    loggedRequests.add(info.requestId);
+    const line = {
+        level: info.status >= 500 ? "error" : info.status >= 400 ? "warn" : "info",
+        msg: "request",
+        requestId: info.requestId,
+        method: req.method,
+        route: `/api/${info.route}`,
+        status: info.status,
+        durationMs: Date.now() - info.startedAt,
+        kv: KV_ENABLED,
+        ...(info.error ? { error: info.error } : {}),
+    };
+    // console.log is the supported transport on Vercel functions.
+    console.log(JSON.stringify(line));
+}
+
+// -------------------------------------------------------- rate limits -----
+//
+// A fixed window per client per bucket, counted in KV so the limit holds across
+// serverless instances instead of per-lambda. Reads are cheap and mostly served
+// from the CDN, so only the endpoints that cost us something are metered:
+// writes, and calls that hit the third-party summariser.
+//
+// Without KV the counters are per-instance — enough to blunt a runaway script
+// in local dev, not a real limit. Deployments that need one need KV.
+
+interface RateLimitRule {
+    /** Requests allowed per window. */
+    limit: number;
+    /** Window length in seconds. */
+    windowS: number;
+}
+
+const RATE_LIMITS: Record<string, RateLimitRule> = {
+    // Roughly "rate a course every few seconds, all day" — generous for a
+    // student browsing the catalog, useless for a script stuffing the ballot.
+    vote: { limit: Number(process.env.RATE_LIMIT_VOTES) || 60, windowS: 60 * 10 },
+    // Each miss costs a provider call, so this one protects our bill.
+    description: { limit: Number(process.env.RATE_LIMIT_DESCRIPTIONS) || 60, windowS: 60 * 10 },
+};
+
+interface RateVerdict {
+    allowed: boolean;
+    limit: number;
+    remaining: number;
+    resetS: number;
+}
+
+const memRate = new Map<string, { count: number; expiresAt: number }>();
+
+/** The identity a limit is counted against: the voter token, else the caller IP. */
+function rateSubject(req: any, voterId: string): string {
+    if (voterId) return `v:${voterId}`;
+    const forwarded = req.headers?.["x-forwarded-for"];
+    const ip = typeof forwarded === "string" ? forwarded.split(",")[0]!.trim() : "";
+    return `ip:${ip || req.socket?.remoteAddress || "unknown"}`;
+}
+
+async function checkRateLimit(bucket: keyof typeof RATE_LIMITS, subject: string): Promise<RateVerdict> {
+    const rule = RATE_LIMITS[bucket]!;
+    const window = Math.floor(Date.now() / 1000 / rule.windowS);
+    const key = `ratelimit:${bucket}:${window}:${subject}`;
+
+    let count: number;
+    if (!KV_ENABLED) {
+        const hit = memRate.get(key);
+        const now = Date.now();
+        if (hit && hit.expiresAt > now) {
+            hit.count += 1;
+            count = hit.count;
+        } else {
+            memRate.set(key, { count: 1, expiresAt: now + rule.windowS * 1000 });
+            count = 1;
+        }
+        // Bound the map so a long-lived instance can't grow it without limit.
+        if (memRate.size > 10_000) {
+            for (const [k, v] of memRate) if (v.expiresAt <= now) memRate.delete(k);
+        }
+    } else {
+        try {
+            // INCR then EXPIRE: the first request in a window creates the key
+            // and sets its TTL, so counters clean themselves up.
+            const [incremented] = await kv([["INCR", key]]);
+            count = Number(incremented) || 1;
+            if (count === 1) await kv([["EXPIRE", key, rule.windowS]]);
+        } catch {
+            // A limiter outage must not take the endpoint down with it.
+            return { allowed: true, limit: rule.limit, remaining: rule.limit, resetS: rule.windowS };
+        }
+    }
+
+    const resetS = (window + 1) * rule.windowS - Math.floor(Date.now() / 1000);
+    return {
+        allowed: count <= rule.limit,
+        limit: rule.limit,
+        remaining: Math.max(0, rule.limit - count),
+        resetS: Math.max(1, resetS),
+    };
+}
+
+function applyRateHeaders(res: any, verdict: RateVerdict): void {
+    res.setHeader("RateLimit-Limit", String(verdict.limit));
+    res.setHeader("RateLimit-Remaining", String(verdict.remaining));
+    res.setHeader("RateLimit-Reset", String(verdict.resetS));
 }
 
 // ------------------------------------------------------ http helpers ------
 
-function withCors(res: any, methods = "GET, POST, OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+// Origins allowed to make *credentialed* calls — ones that carry the voter
+// cookie. Anything else still gets the open, anonymous API. Echoing back an
+// arbitrary Origin with Allow-Credentials would let any site on the web read a
+// student's ballots using their own cookie, so the allowlist is the boundary.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+
+function isAllowedOrigin(origin: string): boolean {
+    if (!origin) return false;
+    const normalised = origin.replace(/\/$/, "");
+    if (ALLOWED_ORIGINS.includes(normalised)) return true;
+    // Vercel gives every deployment its own hostname; the project's own preview
+    // and production URLs are the same app and are trusted alongside it.
+    const self = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
+    if (self && normalised === self) return true;
+    if (process.env.NODE_ENV !== "production" && /^http:\/\/localhost(:\d+)?$/.test(normalised)) return true;
+    return false;
+}
+
+function withCors(res: any, methods = "GET, POST, OPTIONS", origin = "") {
+    // The voter cookie only rides along cross-origin when the exact origin is
+    // echoed back; "*" is incompatible with credentials. Unlisted origins keep
+    // the open anonymous API, just without the cookie.
+    if (isAllowedOrigin(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", methods);
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Expose-Headers", "RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, X-Request-Id");
     res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+/** Headers every API response carries, cheap insurance against content sniffing. */
+function withSecurityHeaders(res: any): void {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Frame-Options", "DENY");
 }
 
 function ok(res: any, data: unknown, cacheSeconds = 300) {
@@ -717,9 +1262,38 @@ function okUncached(res: any, data: unknown) {
     return res.status(200).json({ ok: true, data });
 }
 
-function fail(res: any, status: number, message: string, allow = "POST, OPTIONS") {
+/**
+ * Machine-readable failure codes. Clients should branch on `code`, not on the
+ * message text, which is written for humans and may be reworded.
+ */
+type ErrorCode =
+    | "bad_request"
+    | "not_found"
+    | "method_not_allowed"
+    | "payload_too_large"
+    | "rate_limited"
+    | "upstream_unavailable"
+    | "internal_error";
+
+function fail(res: any, status: number, message: string, allow = "POST, OPTIONS", code?: ErrorCode) {
     if (status === 405) res.setHeader("Allow", allow);
-    return res.status(status).json({ ok: false, error: message });
+    res.setHeader("Cache-Control", "no-store");
+    const resolved: ErrorCode =
+        code ??
+        (status === 404
+            ? "not_found"
+            : status === 405
+              ? "method_not_allowed"
+              : status === 413
+                ? "payload_too_large"
+                : status === 429
+                  ? "rate_limited"
+                  : status === 502
+                    ? "upstream_unavailable"
+                    : status >= 500
+                      ? "internal_error"
+                      : "bad_request");
+    return res.status(status).json({ ok: false, error: message, code: resolved });
 }
 
 function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string, string> } {
@@ -761,7 +1335,16 @@ function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string,
 // ------------------------------------------------------------ router ------
 
 export default async function handler(req: any, res: any) {
-    withCors(res);
+    const startedAt = Date.now();
+    const origin = typeof req.headers?.origin === "string" ? req.headers.origin : "";
+    withCors(res, "GET, POST, OPTIONS", origin);
+    withSecurityHeaders(res);
+
+    // One id per request, echoed to the caller and stamped on every log line,
+    // so a user reporting "it failed at 3pm" can be traced to one invocation.
+    const requestId = readRequestId(req);
+    res.setHeader("X-Request-Id", requestId);
+
     if (req.method === "OPTIONS") {
         return res.status(204).end();
     }
@@ -781,6 +1364,11 @@ export default async function handler(req: any, res: any) {
     const q = req.query ?? {};
 
     try {
+        if (!isBodyWithinLimit(req)) {
+            logRequest(req, res, { requestId, route, status: 413, startedAt });
+            return fail(res, 413, "Request body is too large", "POST, OPTIONS", "payload_too_large");
+        }
+
         // ---- liveness / info (no catalog needed) ----
         if (route === "ping") {
             return ok(res, "pong");
@@ -806,20 +1394,64 @@ export default async function handler(req: any, res: any) {
                     "GET  /api/departments  — departments with course counts",
                     "POST /api/validate     — validate a course plan; body: { \"selected\": [...ids], \"moveUps\": { \"srcId\": \"targetId\" } }",
                     "POST /api/availability — availability state for every course given a plan; same body as /api/validate",
-                    "GET  /api/ratings      — crowd rating tallies for every rated course",
-                    "GET  /api/ratings/:id  — tallies for one course; ?voterId= also returns your own vote",
-                    "POST /api/ratings      — cast one vote; body: { \"courseId\": \"...\", \"value\": 1-10, \"voterId\": \"...\" }",
+                    "GET  /api/ratings      — crowd rating tallies; also returns your own ballots",
+                    "GET  /api/ratings/:id  — tallies for one course, plus your own vote",
+                    "POST /api/ratings      — cast or change your vote; body: { \"courseId\": \"...\", \"value\": 1-10 }",
+                    "GET  /api/description/:id — third-party course summary; ?refresh=1 bypasses the cache",
                 ],
             });
         }
 
         if (route === "status") {
-            const catalog = await getCatalog();
-            return ok(res, {
-                status: "up",
-                catalogVersion: catalog.version,
-                lastUpdated: catalog.lastUpdated,
-                time: new Date().toISOString(),
+            // A readiness probe, not a liveness one: it reports whether the
+            // things this service depends on actually answer. Use /api/ping for
+            // "is the function running at all".
+            const [catalogCheck, storeCheck] = await Promise.all([
+                (async () => {
+                    const started = Date.now();
+                    try {
+                        const catalog = await getCatalog();
+                        return { ok: true, latencyMs: Date.now() - started, version: catalog.version, lastUpdated: catalog.lastUpdated };
+                    } catch (e: any) {
+                        return { ok: false, latencyMs: Date.now() - started, error: e?.message ?? "catalog unavailable" };
+                    }
+                })(),
+                (async () => {
+                    if (!KV_ENABLED) {
+                        return {
+                            ok: false,
+                            configured: false,
+                            durable: false,
+                            note: "No KV credentials. Ratings live in function memory and are lost on a cold start.",
+                        };
+                    }
+                    const started = Date.now();
+                    try {
+                        await kv([["PING"]]);
+                        return { ok: true, configured: true, durable: true, latencyMs: Date.now() - started };
+                    } catch (e: any) {
+                        return { ok: false, configured: true, durable: false, error: e?.message ?? "store unreachable" };
+                    }
+                })(),
+            ]);
+
+            const healthy = catalogCheck.ok && storeCheck.ok;
+            res.setHeader("Cache-Control", "no-store");
+            return res.status(healthy ? 200 : 503).json({
+                ok: healthy,
+                data: {
+                    status: healthy ? "ok" : "degraded",
+                    time: new Date().toISOString(),
+                    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || "development",
+                    commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
+                    checks: {
+                        catalog: catalogCheck,
+                        ratingStore: storeCheck,
+                        descriptionProvider: { configured: DESCRIPTION_ENABLED },
+                    },
+                    catalogVersion: (catalogCheck as any).version ?? null,
+                    lastUpdated: (catalogCheck as any).lastUpdated ?? null,
+                },
             });
         }
 
@@ -966,11 +1598,9 @@ export default async function handler(req: any, res: any) {
             if (req.method === "POST") {
                 const body = req.body ?? {};
                 const courseId = typeof body.courseId === "string" ? body.courseId.trim() : courseIdFromPath;
-                const voterId = typeof body.voterId === "string" ? body.voterId.trim() : "";
                 const value = Math.round(Number(body.value));
 
                 if (!courseId) return fail(res, 400, "Missing courseId");
-                if (!voterId) return fail(res, 400, "Missing voterId");
                 if (!Number.isFinite(value) || value < RATING_MIN || value > RATING_MAX) {
                     return fail(res, 400, `value must be an integer between ${RATING_MIN} and ${RATING_MAX}`);
                 }
@@ -981,16 +1611,27 @@ export default async function handler(req: any, res: any) {
                 );
                 if (!course) return fail(res, 404, `Course not found: ${courseId}`);
 
+                // The cookie, not the body, is the source of truth for who this
+                // is — so a cleared localStorage can't buy a second ballot.
+                const voterId = resolveVoter(req, res, body.voterId);
+
+                const verdict = await checkRateLimit("vote", rateSubject(req, voterId));
+                applyRateHeaders(res, verdict);
+                if (!verdict.allowed) {
+                    res.setHeader("Retry-After", String(verdict.resetS));
+                    return fail(res, 429, "Too many rating requests. Try again shortly.", "POST, OPTIONS", "rate_limited");
+                }
+
                 const result = await castVote(course.id, voterId, value);
                 res.setHeader("Cache-Control", "no-store");
-                // 409 means "you already voted" — the caller keeps its local lock
-                // and shows the vote that stands, rather than double counting.
-                return res.status(result.accepted ? 200 : 409).json({
-                    ok: result.accepted,
-                    error: result.accepted ? undefined : "You have already rated this course",
+                return res.status(200).json({
+                    ok: true,
                     data: {
-                        accepted: result.accepted,
+                        accepted: true,
+                        outcome: result.outcome, // created | changed | unchanged
+                        voterId,
                         yourVote: result.yourVote,
+                        previousVote: result.previousVote,
                         aggregate: result.aggregate,
                         baseline: Number(course.crowdRating) || 0,
                     },
@@ -1008,30 +1649,103 @@ export default async function handler(req: any, res: any) {
                     (c) => c.id.toLowerCase() === courseIdFromPath.toLowerCase(),
                 );
                 if (!course) return fail(res, 404, `Course not found: ${courseIdFromPath}`);
-                const voterId = typeof q.voterId === "string" ? q.voterId : "";
+                const voterId = resolveVoter(req, res, q.voterId);
                 return res.status(200).json({
                     ok: true,
                     data: {
                         courseId: course.id,
+                        voterId,
                         baseline: Number(course.crowdRating) || 0,
                         aggregate: await readTally(course.id),
-                        yourVote: voterId ? await readVoterBallot(course.id, voterId) : null,
+                        yourVote: await readVoterBallot(course.id, voterId),
                     },
                 });
             }
 
+            const voterId = resolveVoter(req, res, q.voterId);
+            const ratings = await listTallies();
             return res.status(200).json({
                 ok: true,
                 data: {
                     persistent: KV_ENABLED,
                     scale: { min: RATING_MIN, max: RATING_MAX },
-                    ratings: await listTallies(),
+                    editable: true,
+                    voterId,
+                    ratings,
+                    // Lets a returning browser rebuild "you rated this" for every
+                    // course without one request per course.
+                    yourVotes: await readVoterBallots(voterId, ratings.map((r) => r.courseId)),
                 },
             });
         }
 
+        if (route === "description" || route.startsWith("description/")) {
+            if (req.method !== "GET") {
+                return fail(res, 405, "Use GET to read a course description", "GET, OPTIONS");
+            }
+
+            const courseIdFromPath = segments[1] ? decodeURIComponent(segments[1]) : "";
+            const courseId = courseIdFromPath || (typeof q.courseId === "string" ? q.courseId : "");
+            if (!courseId) {
+                return fail(res, 400, "Missing course id. Use /api/description/:courseId", "GET, OPTIONS");
+            }
+
+            const catalog = await getCatalog();
+            const course = flattenCourses(catalog).find((c) => c.id.toLowerCase() === courseId.toLowerCase());
+            if (!course) return fail(res, 404, `Course not found: ${courseId}`);
+
+            const locale = typeof q.locale === "string" && q.locale ? q.locale : "en";
+            const refresh = q.refresh === "1" || q.refresh === "true";
+
+            if (!refresh) {
+                const cached = await readCachedSummary(course.id);
+                if (cached) {
+                    res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate");
+                    return res.status(200).json({ ok: true, data: { ...cached, cached: true, provider_configured: DESCRIPTION_ENABLED } });
+                }
+            }
+
+            // Metered only past the cache, so a hot course costs a caller nothing.
+            const verdict = await checkRateLimit("description", rateSubject(req, readCookie(req, VOTER_COOKIE)));
+            applyRateHeaders(res, verdict);
+            if (!verdict.allowed) {
+                res.setHeader("Retry-After", String(verdict.resetS));
+                return fail(res, 429, "Too many description requests. Try again shortly.", "GET, OPTIONS", "rate_limited");
+            }
+
+            try {
+                const summary = await fetchSummary(course, catalog, locale);
+                if (!summary.fallback) await writeCachedSummary(summary);
+                res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate");
+                return res.status(200).json({ ok: true, data: { ...summary, cached: false, provider_configured: DESCRIPTION_ENABLED } });
+            } catch (e: any) {
+                // A provider outage degrades to the catalog text rather than
+                // failing the request — the panel still has something to show.
+                res.setHeader("Cache-Control", "no-store");
+                return res.status(200).json({
+                    ok: true,
+                    data: {
+                        ...catalogSummary(course),
+                        cached: false,
+                        provider_configured: DESCRIPTION_ENABLED,
+                        providerError: e?.message ?? "Description provider failed",
+                    },
+                });
+            }
+        }
+
+        logRequest(req, res, { requestId, route, status: 404, startedAt });
         return fail(res, 404, `Unknown endpoint: /api/${route}. GET /api lists all endpoints.`);
     } catch (e: any) {
-        return fail(res, 502, e?.message ?? "Unknown error");
+        const message = e?.message ?? "Unknown error";
+        logRequest(req, res, { requestId, route, status: 502, startedAt, error: message });
+        return fail(res, 502, message, "POST, OPTIONS", "upstream_unavailable");
+    } finally {
+        // Successful paths return straight from their branch; log them here so
+        // every invocation produces exactly one line whatever route it took.
+        if (!loggedRequests.has(requestId)) {
+            logRequest(req, res, { requestId, route, status: res.statusCode ?? 200, startedAt });
+        }
+        loggedRequests.delete(requestId);
     }
 }

@@ -33,15 +33,23 @@ describe('RatingStore', () => {
         expect(store.getEffectiveRating('A', 7).voteCount).toBe(0);
     });
 
-    it('records a vote and locks the course against a second one', async () => {
+    it('records a vote', async () => {
         const store = new RatingStore();
         const first = await store.vote('A', 9);
-        expect(first.ok).toBe(true);
+        expect(first).toMatchObject({ ok: true, changed: false });
         expect(store.hasVoted('A')).toBe(true);
+        expect(store.getAggregate('A')).toMatchObject({ count: 1, sum: 9 });
+    });
 
+    it('replaces a vote rather than counting the student twice', async () => {
+        const store = new RatingStore();
+        await store.vote('A', 9);
         const second = await store.vote('A', 2);
-        expect(second).toMatchObject({ ok: false, reason: 'already-voted' });
-        expect(store.getAggregate('A').count).toBe(1);
+
+        expect(second).toMatchObject({ ok: true, changed: true });
+        // The count means "this many students", so it stays at one.
+        expect(store.getAggregate('A')).toMatchObject({ count: 1, sum: 2 });
+        expect(store.getMyVote('A')?.value).toBe(2);
     });
 
     it('rejects a rating outside the 1-10 scale', async () => {
@@ -62,20 +70,28 @@ describe('RatingStore', () => {
         expect(store.getMyVote('A')?.synced).toBe(true);
     });
 
-    it('holds the vote as cast when the server says it already has one', async () => {
-        mockFetch(() => ({ status: 409, body: { data: { yourVote: 5, aggregate: { courseId: 'A', sum: 5, count: 1, average: 5 } } } }));
+    it('leaves a vote the server rejected marked unsynced, to be retried', async () => {
+        mockFetch(() => ({ status: 500, body: { error: 'rating store unavailable' } }));
         const store = new RatingStore();
         await store.vote('A', 5);
-        expect(store.getMyVote('A')).toMatchObject({ value: 5, synced: true });
+        expect(store.getMyVote('A')).toMatchObject({ value: 5, synced: false });
     });
 
-    it('blends votes with the catalog baseline instead of swinging to the last vote', async () => {
+    it('takes the tally the server reports over its own optimistic guess', async () => {
+        mockFetch(() => ({ status: 200, body: { data: { yourVote: 5, aggregate: { courseId: 'A', sum: 23, count: 4, average: 5.75 } } } }));
+        const store = new RatingStore();
+        await store.vote('A', 5);
+        expect(store.getAggregate('A')).toMatchObject({ count: 4, sum: 23 });
+        expect(store.getMyVote('A')?.synced).toBe(true);
+    });
+
+    it('shows the student average once anyone has voted, not the catalog number', async () => {
         const store = new RatingStore();
         await store.vote('A', 10);
         const rating = store.getEffectiveRating('A', 5);
-        // One vote against a five-vote-weight prior: closer to the baseline than to 10.
-        expect(rating.value).toBeGreaterThan(5);
-        expect(rating.value).toBeLessThan(7);
+        expect(rating.value).toBe(10);
+        expect(rating.voteCount).toBe(1);
+        expect(rating.baseline).toBe(5);
         expect(rating.myVote).toBe(10);
     });
 

@@ -1,17 +1,16 @@
 // RatingStore.ts
 // - Crowd rating / voting engine for the course catalog.
-// - One vote per person per course: a vote is written to a local ledger the
-//   moment it is cast, so the UI can lock the control and no one can re-vote,
-//   even if the network call fails or the page is reloaded.
-// - The catalog's own `crowdRating` stays as a prior, so a course with two
-//   student votes doesn't swing to a wild number.
+// - One ballot per person per course, and it is editable: coming back and
+//   moving your 7 to a 9 replaces your vote instead of adding another one, so
+//   the vote count still means "this many students", not "this many clicks".
+// - Identity is durable. The server issues a year-long `ccvoter` cookie and the
+//   id is mirrored in localStorage, so a reload, a new tab, or a new browser
+//   session is still the same voter — and either store can restore the other.
+// - The displayed rating is the plain average of student votes. Before anyone
+//   votes it is the catalog's own number.
 
 export const RATING_MIN = 1;
 export const RATING_MAX = 10;
-
-// How many "virtual votes" the catalog baseline is worth. Higher = live votes
-// move the displayed number more slowly.
-const BASELINE_WEIGHT = 5;
 
 const VOTER_KEY = 'shsid-cc.voterId';
 const LEDGER_KEY = 'shsid-cc.ratingLedger.v1';
@@ -30,19 +29,19 @@ export interface MyVote {
 }
 
 export interface EffectiveRating {
-    /** Blended baseline + crowd votes, on the 0-10 scale. */
+    /** The student average on the 0-10 scale, or the baseline before any votes. */
     value: number;
-    /** Number of student votes counted (excludes the baseline prior). */
+    /** Number of students who have rated the course. */
     voteCount: number;
-    /** The catalog's own rating, unblended. */
+    /** The catalog's own rating, shown until the first student votes. */
     baseline: number;
-    /** This device's vote, if any. */
+    /** This voter's own score, if they have rated the course. */
     myVote: number | null;
 }
 
 export type VoteResult =
-    | { ok: true; aggregate: RatingAggregate; myVote: MyVote }
-    | { ok: false; reason: 'already-voted' | 'out-of-range' | 'unknown-course'; myVote: MyVote | null };
+    | { ok: true; aggregate: RatingAggregate; myVote: MyVote; changed: boolean }
+    | { ok: false; reason: 'out-of-range' | 'unknown-course'; myVote: MyVote | null };
 
 type Ledger = Record<string, MyVote>;
 
@@ -107,7 +106,7 @@ export class RatingStore {
 
     // ------------------------------------------------------------ voting ----
 
-    /** True when this device has already rated the course; the UI locks on this. */
+    /** True when this voter already rated the course; the UI shows their score. */
     public hasVoted(courseId: string): boolean {
         return !!this.ledger[courseId];
     }
@@ -117,17 +116,17 @@ export class RatingStore {
     }
 
     /**
-     * Cast a vote. Refuses silently (ok: false) if this device already voted for
-     * the course — that is the whole point of the ledger. The local ledger is
-     * written first so a failed/slow request can never open a second vote.
+     * Cast a vote, or move one already cast. The ledger is written before the
+     * request goes out, so a slow or failed call can never leave the UI showing
+     * a value the device doesn't own. Re-rating replaces the previous ballot:
+     * the local aggregate moves by the delta and the vote count stays put.
      */
     public async vote(courseId: string, value: number): Promise<VoteResult> {
         const existing = this.getMyVote(courseId);
-        if (existing) return { ok: false, reason: 'already-voted', myVote: existing };
 
         const rounded = Math.round(value);
         if (!Number.isFinite(rounded) || rounded < RATING_MIN || rounded > RATING_MAX) {
-            return { ok: false, reason: 'out-of-range', myVote: null };
+            return { ok: false, reason: 'out-of-range', myVote: existing };
         }
 
         const record: MyVote = { value: rounded, votedAt: new Date().toISOString(), synced: false };
@@ -135,23 +134,23 @@ export class RatingStore {
         writeJSON(LEDGER_KEY, this.ledger);
 
         // Optimistic local aggregate so the number moves immediately.
-        this.applyLocalVote(courseId, rounded);
+        this.applyLocalVote(courseId, rounded, existing?.value ?? null);
         this.notify();
 
         try {
             const response = await fetch(`${RatingStore.apiBase}/ratings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin', // carries the durable voter cookie
                 body: JSON.stringify({ courseId, value: rounded, voterId: this.voterId }),
             });
             const payload = await response.json();
 
-            // 409 = the server already has a vote from this voter. Still a
-            // success from the user's point of view: their vote stands, once.
+            this.adoptVoterId(payload?.data?.voterId);
             if (payload?.data?.aggregate) {
                 this.aggregates.set(courseId, payload.data.aggregate as RatingAggregate);
             }
-            if (response.ok || response.status === 409) {
+            if (response.ok) {
                 record.synced = true;
                 if (typeof payload?.data?.yourVote === 'number') record.value = payload.data.yourVote;
                 this.ledger[courseId] = record;
@@ -162,7 +161,23 @@ export class RatingStore {
         }
 
         this.notify();
-        return { ok: true, aggregate: this.getAggregate(courseId), myVote: record };
+        return {
+            ok: true,
+            aggregate: this.getAggregate(courseId),
+            myVote: record,
+            changed: existing !== null,
+        };
+    }
+
+    /**
+     * The server is the authority on who this voter is — it may hand back the
+     * id from its cookie rather than the one we sent. Storing that keeps the
+     * two identity stores converged instead of drifting apart.
+     */
+    private adoptVoterId(serverId: unknown): void {
+        if (typeof serverId !== 'string' || !serverId || serverId === this.voterId) return;
+        this.voterId = serverId;
+        writeJSON(VOTER_KEY, serverId);
     }
 
     /** Re-send any vote that never reached the server (offline when cast). */
@@ -175,11 +190,13 @@ export class RatingStore {
                 const response = await fetch(`${RatingStore.apiBase}/ratings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
                     body: JSON.stringify({ courseId, value: record.value, voterId: this.voterId }),
                 });
-                if (response.ok || response.status === 409) {
+                if (response.ok) {
                     record.synced = true;
                     const payload = await response.json();
+                    this.adoptVoterId(payload?.data?.voterId);
                     if (payload?.data?.aggregate) {
                         this.aggregates.set(courseId, payload.data.aggregate as RatingAggregate);
                     }
@@ -197,16 +214,35 @@ export class RatingStore {
     /** Pull the live tallies for every course. Failure is non-fatal. */
     public async loadAggregates(): Promise<void> {
         try {
-            const response = await fetch(`${RatingStore.apiBase}/ratings`, { cache: 'no-store' });
+            const response = await fetch(`${RatingStore.apiBase}/ratings?voterId=${encodeURIComponent(this.voterId)}`, {
+                cache: 'no-store',
+                credentials: 'same-origin',
+            });
             if (!response.ok) return;
             const payload = await response.json();
+
+            this.adoptVoterId(payload?.data?.voterId);
+
             const rows: RatingAggregate[] = payload?.data?.ratings ?? [];
             rows.forEach((row) => {
                 if (row && typeof row.courseId === 'string') this.aggregates.set(row.courseId, row);
             });
+
+            // Ballots the server holds for this voter. This is what makes a
+            // cleared localStorage (but surviving cookie) still show "you rated
+            // this" instead of inviting a second vote.
+            const serverVotes: Record<string, number> = payload?.data?.yourVotes ?? {};
+            Object.entries(serverVotes).forEach(([courseId, value]) => {
+                if (typeof value !== 'number') return;
+                const local = this.ledger[courseId];
+                if (local && !local.synced) return; // an unsent local edit is newer
+                this.ledger[courseId] = { value, votedAt: local?.votedAt ?? new Date().toISOString(), synced: true };
+            });
+            writeJSON(LEDGER_KEY, this.ledger);
+
             // Local votes that the server hasn't confirmed are still ours to show.
             Object.entries(this.ledger).forEach(([courseId, record]) => {
-                if (!record.synced) this.applyLocalVote(courseId, record.value);
+                if (!record.synced) this.applyLocalVote(courseId, record.value, null);
             });
             this.notify();
         } catch {
@@ -214,11 +250,16 @@ export class RatingStore {
         }
     }
 
-    private applyLocalVote(courseId: string, value: number): void {
+    /**
+     * Fold this device's vote into the local tally. `previous` non-null means
+     * the voter is editing: only the sum moves, because the count already
+     * includes them.
+     */
+    private applyLocalVote(courseId: string, value: number, previous: number | null): void {
         const current = this.aggregates.get(courseId) ?? { courseId, sum: 0, count: 0, average: 0 };
-        const sum = current.sum + value;
-        const count = current.count + 1;
-        this.aggregates.set(courseId, { courseId, sum, count, average: sum / count });
+        const sum = current.sum + value - (previous ?? 0);
+        const count = previous === null ? current.count + 1 : current.count;
+        this.aggregates.set(courseId, { courseId, sum, count, average: count > 0 ? sum / count : 0 });
     }
 
     public getAggregate(courseId: string): RatingAggregate {
@@ -226,15 +267,14 @@ export class RatingStore {
     }
 
     /**
-     * Blend the catalog baseline with student votes. With no votes this is
-     * exactly the catalog number, so nothing regresses before voting starts.
+     * Student votes decide the number outright: one student rating a course 10
+     * shows 10.00, not a figure dragged toward the catalog's own score. The
+     * catalog baseline is only what the course shows before anyone has voted.
      */
     public getEffectiveRating(courseId: string, baseline: number): EffectiveRating {
         const base = Number.isFinite(baseline) ? Math.max(0, Math.min(RATING_MAX, baseline)) : 0;
         const agg = this.getAggregate(courseId);
-        const value = agg.count === 0
-            ? base
-            : (base * BASELINE_WEIGHT + agg.sum) / (BASELINE_WEIGHT + agg.count);
+        const value = agg.count === 0 ? base : agg.sum / agg.count;
 
         return {
             value: Math.max(0, Math.min(RATING_MAX, value)),

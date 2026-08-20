@@ -316,14 +316,22 @@
               </div>
               <div class="h-1.5 w-full bg-black/5 dark:bg-black/40 rounded-full overflow-hidden"><div class="h-full bg-[#34C759] transition-[width] duration-300" :style="{ width: `${(activeRating.value / 10) * 100}%` }"></div></div>
 
-              <!-- Voting: one vote per course, per person. Locks once cast. -->
+              <!-- Voting: one ballot per course, per person, editable any time. -->
               <div class="mt-3 pt-3 border-t border-black/5 dark:border-white/10">
-                <div v-if="activeRating.myVote !== null" class="flex items-center gap-1.5 text-[10px] font-semibold text-[#34C759]">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                  You rated this {{ activeRating.myVote }} / 10
+                <div v-if="activeRating.myVote !== null && !isEditingVote" class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-1.5 text-[10px] font-semibold text-[#34C759]">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    You rated this {{ activeRating.myVote }} / 10
+                  </div>
+                  <button type="button" @click.stop="startEditingVote"
+                    class="text-[9px] font-bold uppercase tracking-wider text-[#007AFF] dark:text-[#0A84FF] hover:opacity-70 transition-opacity duration-0">Change</button>
                 </div>
                 <div v-else>
-                  <div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93] mb-1.5">Rate this course</div>
+                  <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93]">{{ isEditingVote ? 'Change your rating' : 'Rate this course' }}</div>
+                    <button v-if="isEditingVote" type="button" @click.stop="cancelEditingVote"
+                      class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93] hover:opacity-70 transition-opacity duration-0">Cancel</button>
+                  </div>
                   <div class="grid grid-cols-10 gap-[3px]">
                     <button
                       v-for="n in 10" :key="n" type="button"
@@ -333,10 +341,14 @@
                       @focus="hoveredVote = n" @blur="hoveredVote = 0"
                       :aria-label="`Rate this course ${n} out of 10`"
                       class="h-6 rounded-[5px] text-[9px] font-bold transition-colors duration-0 disabled:opacity-40"
-                      :class="n <= hoveredVote ? 'bg-[#34C759] text-white' : 'bg-black/5 dark:bg-white/10 text-[#8E8E93] hover:bg-black/10 dark:hover:bg-white/20'"
+                      :class="voteButtonClass(n)"
                     >{{ n }}</button>
                   </div>
-                  <div class="text-[9px] text-[#8E8E93] mt-1.5 leading-tight">Anonymous, and you can only vote once per course.</div>
+                  <div class="text-[9px] text-[#8E8E93] mt-1.5 leading-tight">
+                    {{ isEditingVote
+                      ? 'Your new score replaces the old one — the course keeps the same number of votes.'
+                      : 'Anonymous. You can come back and change your score any time.' }}
+                  </div>
                 </div>
                 <div v-if="voteError" class="text-[9px] text-[#FF3B30] mt-1.5 font-medium">{{ voteError }}</div>
               </div>
@@ -395,7 +407,7 @@
             <div class="flex flex-col items-center flex-1 pb-6 mt-8">
               <img src="/cc-icon.png" class="w-32 h-32 shrink-0 object-contain mx-auto drop-shadow-sm mb-6 pointer-events-none" draggable="false" alt="Icon" />
               <h2 class="text-[20px] font-bold tracking-tight text-center text-black dark:text-white leading-tight mb-1.5">SHSID Interactive Course Catalog</h2>
-              <p class="text-center text-[#8E8E93] dark:text-[#98989D] font-medium text-[13px] mb-6">Frontend version {{ APP_VERSION }}</p>
+              <p class="text-center text-[#8E8E93] dark:text-[#98989D] font-medium text-[13px] mb-6">Frontend version {{ APP_VERSION }} — updated {{ APP_UPDATED }}</p>
               <div class="w-full bg-[#007AFF]/5 border border-[#007AFF]/20 dark:bg-[#007AFF]/10 dark:border-[#007AFF]/30 p-4 rounded-xl text-black dark:text-white text-[13px] space-y-3 shadow-sm leading-relaxed my-4">Maintainer, prototypes, concepts: <a href="https://github.com/ziqian-huang0607" target="_blank" class="font-semibold text-[#007AFF] hover:underline underline-offset-2">Ziqian Huang</a><br>Backend, UI designs, course content: <a href="https://github.com/willuhd" target="_blank" class="font-semibold text-[#007AFF] hover:underline underline-offset-2">Will Chen</a></div>
               <div class="w-full bg-[#FF9500]/5 border border-[#FF9500]/20 dark:bg-[#FF9500]/10 dark:border-[#FF9500]/30 p-4 rounded-xl text-black dark:text-white text-[13px] shadow-sm leading-relaxed my-4"><strong>⚠️ Disclaimer:</strong> {{ DISCLAIMER }}</div>
               <p class="text-center font-semibold text-black dark:text-white text-[13px] mt-6 mb-5">Built by Ziqian Huang and Will Chen — Indexademics team and Data Science club</p>
@@ -418,7 +430,7 @@
             </div>
           </div>
           <div class="text-right flex flex-col gap-0.5 text-[11px] font-normal text-gray-500 tracking-normal">
-            <div>Frontend: {{ APP_VERSION }}</div>
+            <div>Frontend: {{ APP_VERSION }} ({{ APP_UPDATED }})</div>
             <div>Backend: {{ catalogData?.version }}</div>
             <div>Updated on: {{ catalogData?.lastUpdated }}</div>
             <div>Generated: {{ new Date().toLocaleDateString() }}</div>
@@ -481,6 +493,7 @@ import { decodePlan, encodePlan, isEmptyPlan, plansEqual, type PlanSnapshot } fr
 import { clearSavedPlan, loadPlan, loadPreferences, savePlan, savePreferences, type Preferences } from './backend/Persistence';
 
 const APP_VERSION = "v0.3, revision 24";
+const APP_UPDATED = "Aug 20, 2026";
 const DISCLAIMER = "This is an unofficial tool and isn't affiliated with SHSID. All content derived from the Course Catalog and is for internal reference purposes only. Course availability and policies are subject to change by the school administration. Please schedule a meeting with your homeroom teacher for accurate results!";
 
 interface CourseMeta { id: string; dept: string; grade: string; raw: CourseNode; searchText: string; }
@@ -560,6 +573,8 @@ const ratingsVersion = ref(0); // bumped by the store so computed ratings re-run
 const hoveredVote = ref(0);
 const isSubmittingVote = ref(false);
 const voteError = ref<string | null>(null);
+// Set when a voter who has already rated reopens the scale to move their score.
+const isEditingVote = ref(false);
 
 const isExporting = ref(false);
 const exportRef = ref<HTMLElement | null>(null);
@@ -986,7 +1001,7 @@ const handleToggleDept = (dept: string) => {
   executeMorph(selectedDept.value, newDept);
 };
 
-const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; showPlanPanel.value = false; viewingCourseId.value = courseId; hoveredVote.value = 0; voteError.value = null; };
+const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; showPlanPanel.value = false; viewingCourseId.value = courseId; hoveredVote.value = 0; voteError.value = null; isEditingVote.value = false; };
 const openAboutPanel = () => { viewingCourseId.value = null; showPlanPanel.value = false; showAboutPanel.value = true; };
 
 const startMoveUp = (courseId: string) => { 
@@ -1203,16 +1218,28 @@ const activeRating = computed<EffectiveRating>(() =>
     : { value: 0, voteCount: 0, baseline: 0, myVote: null },
 );
 
+const startEditingVote = () => { isEditingVote.value = true; hoveredVote.value = 0; voteError.value = null; };
+const cancelEditingVote = () => { isEditingVote.value = false; hoveredVote.value = 0; };
+
+// Hovering previews the score you are about to pick; otherwise the scale shows
+// the score you already gave, so "change my 7" starts from a visible 7.
+const voteButtonClass = (n: number): string => {
+  const reference = hoveredVote.value || (isEditingVote.value ? activeRating.value.myVote ?? 0 : 0);
+  return n <= reference
+    ? 'bg-[#34C759] text-white'
+    : 'bg-black/5 dark:bg-white/10 text-[#8E8E93] hover:bg-black/10 dark:hover:bg-white/20';
+};
+
 const submitVote = async (courseId: string, value: number) => {
-  if (isSubmittingVote.value || ratingStore.hasVoted(courseId)) return;
+  if (isSubmittingVote.value) return;
   isSubmittingVote.value = true;
   voteError.value = null;
   try {
     const result = await ratingStore.vote(courseId, value);
     if (!result.ok) {
-      voteError.value = result.reason === 'already-voted'
-        ? 'You have already rated this course.'
-        : 'That rating is out of range.';
+      voteError.value = 'That rating is out of range.';
+    } else {
+      isEditingVote.value = false;
     }
   } catch (e) {
     console.error(e);
@@ -1325,17 +1352,19 @@ const withHistory = (mutate: () => void) => {
   persistPlan(after);
 };
 
-const applySnapshot = (snapshot: PlanSnapshot, options: { notifyDropped?: boolean } = {}) => {
-  if (!controller.value) return;
+/** Applies a snapshot and reports the ids it could not keep, so callers can say so. */
+const applySnapshot = (snapshot: PlanSnapshot): string[] => {
+  if (!controller.value) return [];
   const { dropped } = controller.value.restorePlan(snapshot);
-  if (options.notifyDropped && dropped.length > 0) {
-    announce(`${dropped.length} course${dropped.length === 1 ? '' : 's'} from that plan no longer fit the catalog and were left out.`);
-  }
   const restored = currentSnapshot();
   if (restored) persistPlan(restored);
   cancelMoveUpMode();
   scheduleArrowRefresh();
+  return dropped;
 };
+
+const describeDropped = (dropped: string[]): string =>
+  `${dropped.length} course${dropped.length === 1 ? '' : 's'} no longer fit the catalog and ${dropped.length === 1 ? 'was' : 'were'} left out.`;
 
 const undo = () => {
   const previous = undoStack.value[undoStack.value.length - 1];
@@ -1416,8 +1445,16 @@ const restorePlanFromUrl = (): boolean => {
   // shared plan over the student's own edits on the next reload.
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
   if (!snapshot || isEmptyPlan(snapshot)) return false;
-  applySnapshot(snapshot, { notifyDropped: true });
-  announce('Opened a shared plan.');
+
+  // Applying the shared plan overwrites the plan already saved on this device, and
+  // the history is empty this early, so undo would have nothing to go back to.
+  // Seeding it with the saved plan is what makes "you can undo this" true.
+  const existing = loadPlan();
+  if (existing && !isEmptyPlan(existing)) undoStack.value = [existing];
+
+  const dropped = applySnapshot(snapshot);
+  // One message, or the drop warning is replaced before anyone reads it.
+  announce(dropped.length > 0 ? `Opened a shared plan. ${describeDropped(dropped)}` : 'Opened a shared plan.');
   return true;
 };
 
@@ -1509,12 +1546,14 @@ const exportJson = () => {
   showExportDropdown.value = false;
   const snapshot = currentSnapshot();
   if (!snapshot) return;
+  // `selected` and `moveUps` sit at the top level, and `moveUps` is an object map
+  // rather than the codec's pairs, because that is exactly what POST /api/validate
+  // reads — the file can be posted to the solver as-is.
   const payload = {
+    selected: snapshot.selected,
+    moveUps: Object.fromEntries(snapshot.moveUps),
     catalog: { name: catalogData.value?.catalogName, version: catalogData.value?.version, lastUpdated: catalogData.value?.lastUpdated },
     generatedAt: new Date().toISOString(),
-    // The snapshot is what /api/validate takes, so an exported plan can be checked
-    // against the solver without anyone reverse-engineering the file first.
-    plan: snapshot,
     courses: planRows.value
   };
   downloadFile('4-year-plan.json', JSON.stringify(payload, null, 2), 'application/json');
@@ -1544,10 +1583,13 @@ const loadCatalog = async () => {
     controller.value.connectView(v => viewState.value = v);
 
     // A shared link wins over the locally saved plan: the student clicked it on
-    // purpose, and their own plan is still in storage if they undo.
+    // purpose. Their own plan goes on the undo stack rather than being discarded.
     if (!restorePlanFromUrl()) {
       const saved = loadPlan();
-      if (saved && !isEmptyPlan(saved)) applySnapshot(saved, { notifyDropped: true });
+      if (saved && !isEmptyPlan(saved)) {
+        const dropped = applySnapshot(saved);
+        if (dropped.length > 0) announce(describeDropped(dropped));
+      }
     }
 
     await nextTick();
