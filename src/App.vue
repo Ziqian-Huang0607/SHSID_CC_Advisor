@@ -641,7 +641,7 @@ const handleKeydown = (event: KeyboardEvent) => {
     return;
   }
 
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+  if (!isTypingField && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault();
     if (event.shiftKey) redo(); else undo();
     return;
