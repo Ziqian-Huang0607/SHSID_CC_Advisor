@@ -6,6 +6,7 @@
 import { CatalogSolver, type CourseAvailabilityState, type ResolutionFailure } from "./Solver";
 import type { CourseModel } from "./CourseModel";
 import type { CourseStatus, CourseViewModel } from "./ViewModel";
+import { normalizePlan, type PlanSnapshot } from "./PlanCodec";
 
 export class CourseSelectionController {
     private solver: CatalogSolver;
@@ -141,6 +142,87 @@ export class CourseSelectionController {
     public connectView(callback: (viewModels: Record<string, CourseViewModel>) => void) {
         this.onUpdate = callback;
         this.commit();
+    }
+
+    /**
+     * The student's explicit choices, in a form that survives a reload or a share
+     * link. Only the choices are recorded — the implied prerequisites are derived
+     * again on restore, so a snapshot stays valid even after the catalog changes.
+     */
+    public getPlanSnapshot(): PlanSnapshot {
+        return normalizePlan({
+            selected: [...this.selectedIds],
+            moveUps: [...this.moveUps.entries()]
+        });
+    }
+
+    /**
+     * Replays a snapshot onto this controller.
+     *
+     * A snapshot can be stale (a shared link from an older catalog, or a plan saved
+     * before a course was renamed), so every id is checked against the catalog and
+     * every move-up is re-validated the same way `setExplicitMoveUp` would. Whatever
+     * survives is applied and then pruned, which means a partially-valid plan
+     * restores as much as it legitimately can instead of failing outright.
+     *
+     * Returns the ids that were dropped, so the UI can say so rather than silently
+     * handing back a smaller plan than the student shared.
+     */
+    public restorePlan(snapshot: PlanSnapshot): { dropped: string[] } {
+        const normalized = normalizePlan(snapshot);
+        const dropped: string[] = [];
+
+        const selected = new Set<string>();
+        for (const id of normalized.selected) {
+            if (this.solver.courseMap.has(id)) selected.add(id);
+            else dropped.push(id);
+        }
+
+        const moveUps = new Map<string, string>();
+        for (const [source, target] of normalized.moveUps) {
+            if (!selected.has(source) || !this.solver.courseMap.has(target)) {
+                dropped.push(target);
+                continue;
+            }
+            const sourceGroup = this.solver.getConflictGroupId(source);
+            const reachable = this.getMoveUpChain(source).includes(target);
+            if (!reachable || !sourceGroup || this.solver.getConflictGroupId(target) !== sourceGroup) {
+                dropped.push(target);
+                continue;
+            }
+            moveUps.set(source, target);
+        }
+
+        this.selectedIds = selected;
+        this.moveUps = moveUps;
+
+        // A restored plan can violate rules the catalog has since tightened; prune
+        // rather than leaving the student with a plan the solver calls invalid.
+        const before = new Set(this.selectedIds);
+        this.pruneBrokenSelections();
+        for (const id of before) {
+            if (!this.selectedIds.has(id)) dropped.push(id);
+        }
+
+        this.commit();
+        return { dropped: [...new Set(dropped)] };
+    }
+
+    /** Empties the plan. */
+    public clearPlan() {
+        this.selectedIds = new Set();
+        this.moveUps = new Map();
+        this.commit();
+    }
+
+    /** The courses the student explicitly picked (no implied prerequisites). */
+    public getSelectedIds(): string[] {
+        return [...this.selectedIds].sort();
+    }
+
+    /** Every course in the plan, implied prerequisites included. */
+    public getPlanIds(): string[] {
+        return [...this.planIds].sort();
     }
 
     public handleTap(courseId: string) {
