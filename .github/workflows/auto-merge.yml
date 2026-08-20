@@ -39,6 +39,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The backend solver, plan codec and storage layer are covered by unit tests;
+      # a regression there fails here rather than on someone's four-year plan.
+      - name: Unit tests
+        run: npm test
+
       # `npm run build` runs vue-tsc type-check and the production build, so a
       # type error or broken import fails here instead of on main.
       - name: Type-check and build
