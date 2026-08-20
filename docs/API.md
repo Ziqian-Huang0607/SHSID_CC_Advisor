@@ -233,33 +233,41 @@ own interactive picker on top of our data. Same body as `/api/validate`
 ```
 
 ### `GET /api/ratings`
-Crowd rating tallies for every course that has received at least one student vote.
+Crowd rating tallies for every course that has received at least one student vote,
+plus this caller's own ballots.
 
 ```json
 {
   "ok": true,
   "data": {
     "persistent": true,
+    "editable": true,
     "scale": { "min": 1, "max": 10 },
+    "voterId": "v1-9f2c...",
     "ratings": [
       { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 }
-    ]
+    ],
+    "yourVotes": { "BIO109E010": 9 }
   }
 }
 ```
+
+`yourVotes` maps course id to this voter's own score, so a returning browser can
+restore every "you rated this" in one request instead of one call per course.
 
 `persistent` is `false` when the deployment has no KV credentials configured; in
 that mode tallies live in the function's memory and are lost on a cold start.
 
 ### `GET /api/ratings/:id`
-Tallies for one course. Add `?voterId=` to also get that voter's own ballot back
-(`yourVote` is `null` if they haven't voted).
+Tallies for one course, plus this voter's own ballot (`yourVote` is `null` if
+they haven't rated it).
 
 ```json
 {
   "ok": true,
   "data": {
     "courseId": "BIO109E010",
+    "voterId": "v1-9f2c...",
     "baseline": 8.5,
     "aggregate": { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 },
     "yourVote": 9
@@ -267,55 +275,120 @@ Tallies for one course. Add `?voterId=` to also get that voter's own ballot back
 }
 ```
 
-`baseline` is the catalog's own `crowdRating`. The website blends it with the
-live votes as a prior worth 5 votes, so a course with two ballots doesn't swing
-wildly:
+`baseline` is the catalog's own `crowdRating`. It is what the website displays
+until the first student votes; from the first ballot onward the displayed score
+is the plain student average (`sum / count`), so a single 10 shows as 10.00.
 
-```
-displayed = (baseline * 5 + sum) / (5 + count)
-```
+### Voter identity
+
+Every ratings request resolves a voter token and returns it as `voterId`. It is
+stored in two places so that clearing either one does not hand somebody a second
+ballot:
+
+- **`ccvoter` cookie** — set by the API for one year, `HttpOnly`, `SameSite=Lax`,
+  `Secure`, re-issued on every request so an active user's window keeps sliding
+  forward.
+- **The caller's own copy** — the website mirrors `voterId` in `localStorage` and
+  sends it in the request; the API adopts it when no cookie is present.
+
+The cookie wins when both exist and disagree, because it is the copy the client
+cannot silently rewrite. Browser callers should send `credentials: "same-origin"`
+(or `"include"` cross-origin) or the cookie will not travel. Cross-origin
+requests get the calling origin echoed back with
+`Access-Control-Allow-Credentials: true` rather than `*`.
+
+This identifies a browser profile, not a person. It is not a fingerprint: a
+different browser, a different device, or clearing both stores yields a new
+voter. That is the intended trade — the alternative is tracking students.
 
 ### `POST /api/ratings`
-Cast **one** vote. Each `voterId` may vote once per course — a repeat vote is
-rejected rather than replacing or double-counting the first one.
+Cast a vote, or change one you already cast.
 
 **Body**
 ```json
-{ "courseId": "BIO109E010", "value": 9, "voterId": "anon-token" }
+{ "courseId": "BIO109E010", "value": 9, "voterId": "v1-9f2c..." }
 ```
 
 - `value` — integer, 1 to 10.
-- `voterId` — any stable, caller-generated token (the website uses an anonymous
-  random id kept in `localStorage`). It is stored as a ballot key only.
+- `voterId` — optional. Used only when the request carries no `ccvoter` cookie;
+  the cookie takes precedence when both are present.
 
-**Response `200`** — the vote was recorded:
+**Response `200`**
 ```json
 {
   "ok": true,
   "data": {
     "accepted": true,
+    "outcome": "changed",
+    "voterId": "v1-9f2c...",
     "yourVote": 9,
+    "previousVote": 7,
     "aggregate": { "courseId": "BIO109E010", "sum": 16, "count": 2, "average": 8 },
     "baseline": 8.5
   }
 }
 ```
 
-**Response `409`** — this voter already rated the course. Nothing changed; the
-body reports the vote that stands:
+`outcome` is one of:
+
+| Value | Meaning |
+|---|---|
+| `created` | First ballot from this voter. `sum` grows by `value`, `count` by 1. |
+| `changed` | The voter moved their score. `sum` shifts by the delta, **`count` does not move** — it is still one student. |
+| `unchanged` | Same score resubmitted. Nothing was written. |
+
+Changing a vote is idempotent and unlimited; there is no cooldown. The previous
+score is returned as `previousVote` (`null` for a first ballot).
+
+> **Changed in this version:** this endpoint used to answer `409` when a voter
+> had already rated a course. It no longer does — re-rating is a normal `200`
+> with `outcome: "changed"`. Clients that treated `409` as "your vote stands"
+> keep working, but will never see it again.
+
+### `GET /api/description/:id`
+A readable summary of one course, generated by a third-party service the
+deployment is pointed at. See [`input.md`](./input.md) for the provider contract
+and the environment variables.
+
 ```json
 {
-  "ok": false,
-  "error": "You have already rated this course",
-  "data": { "accepted": false, "yourVote": 9, "aggregate": { "...": "..." } }
+  "ok": true,
+  "data": {
+    "courseId": "BIO109E010",
+    "name": "Biology 9 Standard",
+    "summary": "A first-year lab science that assumes no prior biology...",
+    "highlights": ["Weekly lab writeups", "No prerequisites"],
+    "workload": "4-6 hrs/week",
+    "bestFor": "Students planning to take AP Biology in G11",
+    "difficulty": "Moderate",
+    "provider": "your-host.example.com",
+    "model": "your-model-name",
+    "generatedAt": "2026-08-20T06:33:34.479Z",
+    "fallback": false,
+    "cached": false,
+    "provider_configured": true
+  }
 }
 ```
+
+**Query parameters**
+
+- `?refresh=1` — skip the cache and re-ask the provider.
+- `?locale=zh` — passed through to the provider; defaults to `en`.
+
+Summaries are cached in KV for 7 days by default (`DESCRIPTION_CACHE_TTL_S`).
+
+`fallback: true` means the payload is the catalog's own description rather than a
+generated summary — either no provider is configured (`provider_configured:
+false`) or the call failed, in which case `providerError` carries the reason.
+Either way the status is `200`: a provider outage degrades the text, it does not
+blank the course panel.
 
 ---
 
 ## CORS, rate limits, fair use
 
-- **CORS:** all endpoints send `Access-Control-Allow-Origin: *`, so browsers can call them directly from any origin. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
+- **CORS:** endpoints send `Access-Control-Allow-Origin: *` for anonymous callers. When the request carries an `Origin` header that origin is echoed back with `Access-Control-Allow-Credentials: true` instead, so the voter cookie can travel. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
 - **Request bodies:** the `POST` endpoints accept a JSON object body. Sending `Content-Type: application/json` is recommended; a raw JSON string body is also parsed. A body that isn't a JSON object returns `400` rather than being treated as an empty plan.
 - **Auth:** none. Please don't hammer it — Vercel's standard limits apply. Cache responses on your side where you can.
 - **Freshness:** catalog data is mirrored from the upstream source and cached ~5 minutes; check `version`/`lastUpdated` in `/api/meta`.
@@ -327,7 +400,6 @@ body reports the vote that stands:
 | 400 | Bad request (missing/invalid params or body) |
 | 404 | Resource not found (e.g. unknown course id) |
 | 405 | Wrong HTTP method |
-| 409 | Duplicate vote — this `voterId` already rated this course |
 | 502 | Upstream catalog fetch failed — retry shortly |
 
 All errors use the `{ "ok": false, "error": "..." }` envelope.

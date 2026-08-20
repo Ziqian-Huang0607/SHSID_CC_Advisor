@@ -29,8 +29,9 @@ This repo ships a free, open, CORS-enabled JSON API (Vercel serverless functions
 - `GET /api/grades` · `GET /api/tracks` · `GET /api/departments` · `GET /api/status`
 - `POST /api/validate` — validate a course plan with the real solver
 - `POST /api/availability` — per-course availability for any plan
-- `GET /api/ratings` · `GET /api/ratings/:id` — crowd rating tallies
-- `POST /api/ratings` — cast a student rating (1–10); one vote per voter per course
+- `GET /api/ratings` · `GET /api/ratings/:id` — crowd rating tallies, plus your own ballots
+- `POST /api/ratings` — cast a student rating (1–10); one ballot per voter per course, changeable any time
+- `GET /api/description/:id` — third-party course summary ([provider setup](docs/input.md))
 
 No API key, `Access-Control-Allow-Origin: *`. Full reference with examples: **[docs/API.md](./docs/API.md)**
 

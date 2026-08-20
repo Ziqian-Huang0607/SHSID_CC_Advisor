@@ -205,14 +205,22 @@
               </div>
               <div class="h-1.5 w-full bg-black/5 dark:bg-black/40 rounded-full overflow-hidden"><div class="h-full bg-[#34C759] transition-[width] duration-300" :style="{ width: `${(activeRating.value / 10) * 100}%` }"></div></div>
 
-              <!-- Voting: one vote per course, per person. Locks once cast. -->
+              <!-- Voting: one ballot per course, per person, editable any time. -->
               <div class="mt-3 pt-3 border-t border-black/5 dark:border-white/10">
-                <div v-if="activeRating.myVote !== null" class="flex items-center gap-1.5 text-[10px] font-semibold text-[#34C759]">
-                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                  You rated this {{ activeRating.myVote }} / 10
+                <div v-if="activeRating.myVote !== null && !isEditingVote" class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-1.5 text-[10px] font-semibold text-[#34C759]">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    You rated this {{ activeRating.myVote }} / 10
+                  </div>
+                  <button type="button" @click.stop="startEditingVote"
+                    class="text-[9px] font-bold uppercase tracking-wider text-[#007AFF] dark:text-[#0A84FF] hover:opacity-70 transition-opacity duration-0">Change</button>
                 </div>
                 <div v-else>
-                  <div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93] mb-1.5">Rate this course</div>
+                  <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93]">{{ isEditingVote ? 'Change your rating' : 'Rate this course' }}</div>
+                    <button v-if="isEditingVote" type="button" @click.stop="cancelEditingVote"
+                      class="text-[9px] font-bold uppercase tracking-wider text-[#8E8E93] hover:opacity-70 transition-opacity duration-0">Cancel</button>
+                  </div>
                   <div class="grid grid-cols-10 gap-[3px]">
                     <button
                       v-for="n in 10" :key="n" type="button"
@@ -220,10 +228,14 @@
                       @click.stop="submitVote(viewingCourseId!, n)"
                       @mouseenter="hoveredVote = n" @mouseleave="hoveredVote = 0"
                       class="h-6 rounded-[5px] text-[9px] font-bold transition-colors duration-0 disabled:opacity-40"
-                      :class="n <= hoveredVote ? 'bg-[#34C759] text-white' : 'bg-black/5 dark:bg-white/10 text-[#8E8E93] hover:bg-black/10 dark:hover:bg-white/20'"
+                      :class="voteButtonClass(n)"
                     >{{ n }}</button>
                   </div>
-                  <div class="text-[9px] text-[#8E8E93] mt-1.5 leading-tight">Anonymous, and you can only vote once per course.</div>
+                  <div class="text-[9px] text-[#8E8E93] mt-1.5 leading-tight">
+                    {{ isEditingVote
+                      ? 'Your new score replaces the old one — the course keeps the same number of votes.'
+                      : 'Anonymous. You can come back and change your score any time.' }}
+                  </div>
                 </div>
                 <div v-if="voteError" class="text-[9px] text-[#FF3B30] mt-1.5 font-medium">{{ voteError }}</div>
               </div>
@@ -359,6 +371,8 @@ const ratingsVersion = ref(0); // bumped by the store so computed ratings re-run
 const hoveredVote = ref(0);
 const isSubmittingVote = ref(false);
 const voteError = ref<string | null>(null);
+// Set when a voter who has already rated reopens the scale to move their score.
+const isEditingVote = ref(false);
 
 const isExporting = ref(false);
 const exportRef = ref<HTMLElement | null>(null);
@@ -673,7 +687,7 @@ const handleToggleDept = (dept: string) => {
   executeMorph(selectedDept.value, newDept);
 };
 
-const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; viewingCourseId.value = courseId; hoveredVote.value = 0; voteError.value = null; };
+const openCourseInfo = (courseId: string) => { showAboutPanel.value = false; viewingCourseId.value = courseId; hoveredVote.value = 0; voteError.value = null; isEditingVote.value = false; };
 const openAboutPanel = () => { viewingCourseId.value = null; showAboutPanel.value = true; };
 
 const startMoveUp = (courseId: string) => { 
@@ -873,16 +887,28 @@ const activeRating = computed<EffectiveRating>(() =>
     : { value: 0, voteCount: 0, baseline: 0, myVote: null },
 );
 
+const startEditingVote = () => { isEditingVote.value = true; hoveredVote.value = 0; voteError.value = null; };
+const cancelEditingVote = () => { isEditingVote.value = false; hoveredVote.value = 0; };
+
+// Hovering previews the score you are about to pick; otherwise the scale shows
+// the score you already gave, so "change my 7" starts from a visible 7.
+const voteButtonClass = (n: number): string => {
+  const reference = hoveredVote.value || (isEditingVote.value ? activeRating.value.myVote ?? 0 : 0);
+  return n <= reference
+    ? 'bg-[#34C759] text-white'
+    : 'bg-black/5 dark:bg-white/10 text-[#8E8E93] hover:bg-black/10 dark:hover:bg-white/20';
+};
+
 const submitVote = async (courseId: string, value: number) => {
-  if (isSubmittingVote.value || ratingStore.hasVoted(courseId)) return;
+  if (isSubmittingVote.value) return;
   isSubmittingVote.value = true;
   voteError.value = null;
   try {
     const result = await ratingStore.vote(courseId, value);
     if (!result.ok) {
-      voteError.value = result.reason === 'already-voted'
-        ? 'You have already rated this course.'
-        : 'That rating is out of range.';
+      voteError.value = 'That rating is out of range.';
+    } else {
+      isEditingVote.value = false;
     }
   } catch (e) {
     console.error(e);
