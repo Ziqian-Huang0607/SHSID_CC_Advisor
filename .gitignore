@@ -9,6 +9,11 @@ lerna-debug.log*
 
 node_modules
 .DS_Store
+
+# Local secrets. .env.example is the committed template.
+.env
+.env.*
+!.env.example
 dist
 dist-ssr
 coverage

@@ -388,18 +388,51 @@ blank the course panel.
 
 ## CORS, rate limits, fair use
 
-- **CORS:** endpoints send `Access-Control-Allow-Origin: *` for anonymous callers. When the request carries an `Origin` header that origin is echoed back with `Access-Control-Allow-Credentials: true` instead, so the voter cookie can travel. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
-- **Request bodies:** the `POST` endpoints accept a JSON object body. Sending `Content-Type: application/json` is recommended; a raw JSON string body is also parsed. A body that isn't a JSON object returns `400` rather than being treated as an empty plan.
-- **Auth:** none. Please don't hammer it — Vercel's standard limits apply. Cache responses on your side where you can.
+- **CORS:** endpoints send `Access-Control-Allow-Origin: *`, so anyone can read the API anonymously from a browser. *Credentialed* calls — ones carrying the voter cookie — are restricted to an allowlist (`ALLOWED_ORIGINS`, plus the project's own origin); those get their exact origin echoed back with `Access-Control-Allow-Credentials: true`. Unlisted origins still get the open API, just without the cookie. Preflight (`OPTIONS`) responses advertise `GET, POST, OPTIONS`, so the `POST` endpoints work from the browser too.
+- **Request bodies:** the `POST` endpoints accept a JSON object body. Sending `Content-Type: application/json` is recommended; a raw JSON string body is also parsed. A body that isn't a JSON object returns `400` rather than being treated as an empty plan. Bodies over 16 KB are rejected with `413`.
+- **Auth:** none.
+- **Rate limits:** reads are unmetered. The endpoints that cost something — casting a vote, and a description that misses the cache — allow 60 requests per 10 minutes, counted per voter (falling back to IP). Metered responses carry `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` (seconds); exceeding the limit returns `429` with `Retry-After`.
+- **Request ids:** every response carries `X-Request-Id`. Send your own `X-Request-Id` and it is used as-is. Quote it when reporting a problem.
 - **Freshness:** catalog data is mirrored from the upstream source and cached ~5 minutes; check `version`/`lastUpdated` in `/api/meta`.
+
+## Health checks
+
+- `GET /api/ping` — liveness. `200` means the function is running.
+- `GET /api/status` — readiness. Checks the upstream catalog and the rating store, and returns `503` when either is unavailable, so it can be pointed straight at an uptime monitor.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "ok",
+    "time": "2026-08-20T06:33:34.479Z",
+    "environment": "production",
+    "commit": "b2a5e75...",
+    "checks": {
+      "catalog": { "ok": true, "latencyMs": 84, "version": "v0.3-experimental" },
+      "ratingStore": { "ok": true, "configured": true, "durable": true, "latencyMs": 12 },
+      "descriptionProvider": { "configured": true }
+    }
+  }
+}
+```
+
+`ratingStore.durable` is the one to watch: `false` means votes are being held in
+function memory and will be lost on the next cold start. Deployment setup is in
+[DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Errors
 
-| Status | Meaning |
-|---|---|
-| 400 | Bad request (missing/invalid params or body) |
-| 404 | Resource not found (e.g. unknown course id) |
-| 405 | Wrong HTTP method |
-| 502 | Upstream catalog fetch failed — retry shortly |
+| Status | `code` | Meaning |
+|---|---|---|
+| 400 | `bad_request` | Missing or invalid params or body |
+| 404 | `not_found` | Unknown course id or endpoint |
+| 405 | `method_not_allowed` | Wrong HTTP method |
+| 413 | `payload_too_large` | Request body over the size limit |
+| 429 | `rate_limited` | Too many requests; see `Retry-After` |
+| 502 | `upstream_unavailable` | Upstream catalog fetch failed — retry shortly |
+| 503 | — | `/api/status` only: a dependency is down |
 
-All errors use the `{ "ok": false, "error": "..." }` envelope.
+All errors use the `{ "ok": false, "error": "...", "code": "..." }` envelope.
+Branch on `code`, not on `error`, which is written for humans and may be
+reworded.

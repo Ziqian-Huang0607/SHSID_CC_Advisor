@@ -1061,21 +1061,194 @@ function resolveVoter(req: any, res: any, claimed: unknown): string {
     return voterId;
 }
 
+// ------------------------------------------------- observability ----------
+//
+// One structured line per request, on stdout, where Vercel's log drain picks it
+// up. JSON rather than prose so it can be queried: filter by status, group by
+// route, chart p95 duration. No request bodies and no voter tokens are logged —
+// a log that identifies who voted what defeats the point of anonymous ballots.
+
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES) || 16 * 1024;
+
+/** Ids already written, so the finally-block doesn't log a request twice. */
+const loggedRequests = new Set<string>();
+
+function readRequestId(req: any): string {
+    const header = req.headers?.["x-request-id"] ?? req.headers?.["x-vercel-id"];
+    if (typeof header === "string" && header && header.length <= 200) return header;
+    try {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+    } catch {
+        /* fall through */
+    }
+    return `req-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
+/** Reject oversized bodies before parsing rather than after. */
+function isBodyWithinLimit(req: any): boolean {
+    const declared = Number(req.headers?.["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return false;
+    const body = req.body;
+    if (typeof body === "string" && body.length > MAX_BODY_BYTES) return false;
+    return true;
+}
+
+function logRequest(
+    req: any,
+    res: any,
+    info: { requestId: string; route: string; status: number; startedAt: number; error?: string },
+): void {
+    loggedRequests.add(info.requestId);
+    const line = {
+        level: info.status >= 500 ? "error" : info.status >= 400 ? "warn" : "info",
+        msg: "request",
+        requestId: info.requestId,
+        method: req.method,
+        route: `/api/${info.route}`,
+        status: info.status,
+        durationMs: Date.now() - info.startedAt,
+        kv: KV_ENABLED,
+        ...(info.error ? { error: info.error } : {}),
+    };
+    // console.log is the supported transport on Vercel functions.
+    console.log(JSON.stringify(line));
+}
+
+// -------------------------------------------------------- rate limits -----
+//
+// A fixed window per client per bucket, counted in KV so the limit holds across
+// serverless instances instead of per-lambda. Reads are cheap and mostly served
+// from the CDN, so only the endpoints that cost us something are metered:
+// writes, and calls that hit the third-party summariser.
+//
+// Without KV the counters are per-instance — enough to blunt a runaway script
+// in local dev, not a real limit. Deployments that need one need KV.
+
+interface RateLimitRule {
+    /** Requests allowed per window. */
+    limit: number;
+    /** Window length in seconds. */
+    windowS: number;
+}
+
+const RATE_LIMITS: Record<string, RateLimitRule> = {
+    // Roughly "rate a course every few seconds, all day" — generous for a
+    // student browsing the catalog, useless for a script stuffing the ballot.
+    vote: { limit: Number(process.env.RATE_LIMIT_VOTES) || 60, windowS: 60 * 10 },
+    // Each miss costs a provider call, so this one protects our bill.
+    description: { limit: Number(process.env.RATE_LIMIT_DESCRIPTIONS) || 60, windowS: 60 * 10 },
+};
+
+interface RateVerdict {
+    allowed: boolean;
+    limit: number;
+    remaining: number;
+    resetS: number;
+}
+
+const memRate = new Map<string, { count: number; expiresAt: number }>();
+
+/** The identity a limit is counted against: the voter token, else the caller IP. */
+function rateSubject(req: any, voterId: string): string {
+    if (voterId) return `v:${voterId}`;
+    const forwarded = req.headers?.["x-forwarded-for"];
+    const ip = typeof forwarded === "string" ? forwarded.split(",")[0]!.trim() : "";
+    return `ip:${ip || req.socket?.remoteAddress || "unknown"}`;
+}
+
+async function checkRateLimit(bucket: keyof typeof RATE_LIMITS, subject: string): Promise<RateVerdict> {
+    const rule = RATE_LIMITS[bucket]!;
+    const window = Math.floor(Date.now() / 1000 / rule.windowS);
+    const key = `ratelimit:${bucket}:${window}:${subject}`;
+
+    let count: number;
+    if (!KV_ENABLED) {
+        const hit = memRate.get(key);
+        const now = Date.now();
+        if (hit && hit.expiresAt > now) {
+            hit.count += 1;
+            count = hit.count;
+        } else {
+            memRate.set(key, { count: 1, expiresAt: now + rule.windowS * 1000 });
+            count = 1;
+        }
+        // Bound the map so a long-lived instance can't grow it without limit.
+        if (memRate.size > 10_000) {
+            for (const [k, v] of memRate) if (v.expiresAt <= now) memRate.delete(k);
+        }
+    } else {
+        try {
+            // INCR then EXPIRE: the first request in a window creates the key
+            // and sets its TTL, so counters clean themselves up.
+            const [incremented] = await kv([["INCR", key]]);
+            count = Number(incremented) || 1;
+            if (count === 1) await kv([["EXPIRE", key, rule.windowS]]);
+        } catch {
+            // A limiter outage must not take the endpoint down with it.
+            return { allowed: true, limit: rule.limit, remaining: rule.limit, resetS: rule.windowS };
+        }
+    }
+
+    const resetS = (window + 1) * rule.windowS - Math.floor(Date.now() / 1000);
+    return {
+        allowed: count <= rule.limit,
+        limit: rule.limit,
+        remaining: Math.max(0, rule.limit - count),
+        resetS: Math.max(1, resetS),
+    };
+}
+
+function applyRateHeaders(res: any, verdict: RateVerdict): void {
+    res.setHeader("RateLimit-Limit", String(verdict.limit));
+    res.setHeader("RateLimit-Remaining", String(verdict.remaining));
+    res.setHeader("RateLimit-Reset", String(verdict.resetS));
+}
+
 // ------------------------------------------------------ http helpers ------
 
-function withCors(res: any, methods = "GET, POST, OPTIONS", origin?: string) {
-    // The voter cookie only rides along on cross-origin requests when the
-    // origin is echoed back exactly; "*" is incompatible with credentials.
-    if (origin) {
+// Origins allowed to make *credentialed* calls — ones that carry the voter
+// cookie. Anything else still gets the open, anonymous API. Echoing back an
+// arbitrary Origin with Allow-Credentials would let any site on the web read a
+// student's ballots using their own cookie, so the allowlist is the boundary.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+
+function isAllowedOrigin(origin: string): boolean {
+    if (!origin) return false;
+    const normalised = origin.replace(/\/$/, "");
+    if (ALLOWED_ORIGINS.includes(normalised)) return true;
+    // Vercel gives every deployment its own hostname; the project's own preview
+    // and production URLs are the same app and are trusted alongside it.
+    const self = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
+    if (self && normalised === self) return true;
+    if (process.env.NODE_ENV !== "production" && /^http:\/\/localhost(:\d+)?$/.test(normalised)) return true;
+    return false;
+}
+
+function withCors(res: any, methods = "GET, POST, OPTIONS", origin = "") {
+    // The voter cookie only rides along cross-origin when the exact origin is
+    // echoed back; "*" is incompatible with credentials. Unlisted origins keep
+    // the open anonymous API, just without the cookie.
+    if (isAllowedOrigin(origin)) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Vary", "Origin");
     } else {
         res.setHeader("Access-Control-Allow-Origin", "*");
     }
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", methods);
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Expose-Headers", "RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, X-Request-Id");
     res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+/** Headers every API response carries, cheap insurance against content sniffing. */
+function withSecurityHeaders(res: any): void {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Frame-Options", "DENY");
 }
 
 function ok(res: any, data: unknown, cacheSeconds = 300) {
@@ -1089,9 +1262,38 @@ function okUncached(res: any, data: unknown) {
     return res.status(200).json({ ok: true, data });
 }
 
-function fail(res: any, status: number, message: string, allow = "POST, OPTIONS") {
+/**
+ * Machine-readable failure codes. Clients should branch on `code`, not on the
+ * message text, which is written for humans and may be reworded.
+ */
+type ErrorCode =
+    | "bad_request"
+    | "not_found"
+    | "method_not_allowed"
+    | "payload_too_large"
+    | "rate_limited"
+    | "upstream_unavailable"
+    | "internal_error";
+
+function fail(res: any, status: number, message: string, allow = "POST, OPTIONS", code?: ErrorCode) {
     if (status === 405) res.setHeader("Allow", allow);
-    return res.status(status).json({ ok: false, error: message });
+    res.setHeader("Cache-Control", "no-store");
+    const resolved: ErrorCode =
+        code ??
+        (status === 404
+            ? "not_found"
+            : status === 405
+              ? "method_not_allowed"
+              : status === 413
+                ? "payload_too_large"
+                : status === 429
+                  ? "rate_limited"
+                  : status === 502
+                    ? "upstream_unavailable"
+                    : status >= 500
+                      ? "internal_error"
+                      : "bad_request");
+    return res.status(status).json({ ok: false, error: message, code: resolved });
 }
 
 function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string, string> } {
@@ -1133,8 +1335,16 @@ function parsePlanBody(body: any): { selected: Set<string>; moveUps: Map<string,
 // ------------------------------------------------------------ router ------
 
 export default async function handler(req: any, res: any) {
+    const startedAt = Date.now();
     const origin = typeof req.headers?.origin === "string" ? req.headers.origin : "";
     withCors(res, "GET, POST, OPTIONS", origin);
+    withSecurityHeaders(res);
+
+    // One id per request, echoed to the caller and stamped on every log line,
+    // so a user reporting "it failed at 3pm" can be traced to one invocation.
+    const requestId = readRequestId(req);
+    res.setHeader("X-Request-Id", requestId);
+
     if (req.method === "OPTIONS") {
         return res.status(204).end();
     }
@@ -1154,6 +1364,11 @@ export default async function handler(req: any, res: any) {
     const q = req.query ?? {};
 
     try {
+        if (!isBodyWithinLimit(req)) {
+            logRequest(req, res, { requestId, route, status: 413, startedAt });
+            return fail(res, 413, "Request body is too large", "POST, OPTIONS", "payload_too_large");
+        }
+
         // ---- liveness / info (no catalog needed) ----
         if (route === "ping") {
             return ok(res, "pong");
@@ -1188,12 +1403,55 @@ export default async function handler(req: any, res: any) {
         }
 
         if (route === "status") {
-            const catalog = await getCatalog();
-            return ok(res, {
-                status: "up",
-                catalogVersion: catalog.version,
-                lastUpdated: catalog.lastUpdated,
-                time: new Date().toISOString(),
+            // A readiness probe, not a liveness one: it reports whether the
+            // things this service depends on actually answer. Use /api/ping for
+            // "is the function running at all".
+            const [catalogCheck, storeCheck] = await Promise.all([
+                (async () => {
+                    const started = Date.now();
+                    try {
+                        const catalog = await getCatalog();
+                        return { ok: true, latencyMs: Date.now() - started, version: catalog.version, lastUpdated: catalog.lastUpdated };
+                    } catch (e: any) {
+                        return { ok: false, latencyMs: Date.now() - started, error: e?.message ?? "catalog unavailable" };
+                    }
+                })(),
+                (async () => {
+                    if (!KV_ENABLED) {
+                        return {
+                            ok: false,
+                            configured: false,
+                            durable: false,
+                            note: "No KV credentials. Ratings live in function memory and are lost on a cold start.",
+                        };
+                    }
+                    const started = Date.now();
+                    try {
+                        await kv([["PING"]]);
+                        return { ok: true, configured: true, durable: true, latencyMs: Date.now() - started };
+                    } catch (e: any) {
+                        return { ok: false, configured: true, durable: false, error: e?.message ?? "store unreachable" };
+                    }
+                })(),
+            ]);
+
+            const healthy = catalogCheck.ok && storeCheck.ok;
+            res.setHeader("Cache-Control", "no-store");
+            return res.status(healthy ? 200 : 503).json({
+                ok: healthy,
+                data: {
+                    status: healthy ? "ok" : "degraded",
+                    time: new Date().toISOString(),
+                    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || "development",
+                    commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
+                    checks: {
+                        catalog: catalogCheck,
+                        ratingStore: storeCheck,
+                        descriptionProvider: { configured: DESCRIPTION_ENABLED },
+                    },
+                    catalogVersion: (catalogCheck as any).version ?? null,
+                    lastUpdated: (catalogCheck as any).lastUpdated ?? null,
+                },
             });
         }
 
@@ -1356,6 +1614,14 @@ export default async function handler(req: any, res: any) {
                 // The cookie, not the body, is the source of truth for who this
                 // is — so a cleared localStorage can't buy a second ballot.
                 const voterId = resolveVoter(req, res, body.voterId);
+
+                const verdict = await checkRateLimit("vote", rateSubject(req, voterId));
+                applyRateHeaders(res, verdict);
+                if (!verdict.allowed) {
+                    res.setHeader("Retry-After", String(verdict.resetS));
+                    return fail(res, 429, "Too many rating requests. Try again shortly.", "POST, OPTIONS", "rate_limited");
+                }
+
                 const result = await castVote(course.id, voterId, value);
                 res.setHeader("Cache-Control", "no-store");
                 return res.status(200).json({
@@ -1439,6 +1705,14 @@ export default async function handler(req: any, res: any) {
                 }
             }
 
+            // Metered only past the cache, so a hot course costs a caller nothing.
+            const verdict = await checkRateLimit("description", rateSubject(req, readCookie(req, VOTER_COOKIE)));
+            applyRateHeaders(res, verdict);
+            if (!verdict.allowed) {
+                res.setHeader("Retry-After", String(verdict.resetS));
+                return fail(res, 429, "Too many description requests. Try again shortly.", "GET, OPTIONS", "rate_limited");
+            }
+
             try {
                 const summary = await fetchSummary(course, catalog, locale);
                 if (!summary.fallback) await writeCachedSummary(summary);
@@ -1460,8 +1734,18 @@ export default async function handler(req: any, res: any) {
             }
         }
 
+        logRequest(req, res, { requestId, route, status: 404, startedAt });
         return fail(res, 404, `Unknown endpoint: /api/${route}. GET /api lists all endpoints.`);
     } catch (e: any) {
-        return fail(res, 502, e?.message ?? "Unknown error");
+        const message = e?.message ?? "Unknown error";
+        logRequest(req, res, { requestId, route, status: 502, startedAt, error: message });
+        return fail(res, 502, message, "POST, OPTIONS", "upstream_unavailable");
+    } finally {
+        // Successful paths return straight from their branch; log them here so
+        // every invocation produces exactly one line whatever route it took.
+        if (!loggedRequests.has(requestId)) {
+            logRequest(req, res, { requestId, route, status: res.statusCode ?? 200, startedAt });
+        }
+        loggedRequests.delete(requestId);
     }
 }

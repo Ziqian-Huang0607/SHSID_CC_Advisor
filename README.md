@@ -37,8 +37,8 @@ No API key, `Access-Control-Allow-Origin: *`. Full reference with examples: **[d
 
 ### Tech stack & usage
 - **Frontend**: [Vue 3](https://vuejs.org/), [Vite](https://vitejs.dev/), [TypeScript](https://www.typescriptlang.org/), [Tailwind CSS](https://tailwindcss.com/), [GSAP](https://gsap.com/)
-- **Backend**: Full TypeScript
-- **Run locally**: [Node.js](https://nodejs.org/) (v18+), `brew install node`
+- **Backend**: Full TypeScript, one Vercel serverless function, [Upstash Redis](https://upstash.com/) for crowd ratings
+- **Run locally**: [Node.js](https://nodejs.org/) (v20+), `brew install node`
     ```sh
     git clone https://github.com/Ziqian-Huang0607/SHSID_CC_Advisor.git
     cd SHSID_CC_Advisor
@@ -46,6 +46,43 @@ No API key, `Access-Control-Allow-Origin: *`. Full reference with examples: **[d
     npm run dev
     ```
     Then just open [http://localhost:5173](http://localhost:5173) in your browser.
+
+    `vite dev` serves the front end only. For the API, `npm run api` starts it on
+    [http://localhost:8123/api](http://localhost:8123/api), and `npm run test:api`
+    runs the smoke suite against an in-process copy.
+
+## Deploying
+
+The app deploys to [Vercel](https://vercel.com) as-is: `vercel.json` carries the
+build, routing, cache, and security-header configuration, and `api/` becomes a
+single serverless function. Import the repo at
+[vercel.com/new](https://vercel.com/new) and deploy — no settings to fill in.
+
+**One step matters before students use it.** Out of the box, crowd ratings are
+kept in the function's memory: they are not shared between instances and they
+are wiped on every cold start. Votes will appear to save and then disappear.
+
+To make them durable:
+
+1. Vercel dashboard → **Storage** → create an **Upstash Redis** database and
+   connect it to the project. `KV_REST_API_URL` and `KV_REST_API_TOKEN` are
+   injected automatically.
+2. **Redeploy** — env vars are only read at cold start.
+3. Confirm it took effect:
+
+   ```sh
+   curl -s https://<your-deployment>/api/status | jq '.data.checks.ratingStore'
+   ```
+
+   `"durable": true` means votes are persisted. `false` means they are not,
+   whatever the UI appears to do.
+
+Optional environment variables — the description provider, cross-origin
+allowlist, and rate limits — are listed in [`.env.example`](./.env.example).
+
+Health checks, log format, rate-limit headers, verification, and rollback are
+documented in **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)**. The course
+description provider contract is in **[docs/input.md](./docs/input.md)**.
 
 ### Support
 - **Maintenance**: Indexademics team

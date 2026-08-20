@@ -8,7 +8,9 @@
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "build-only": "vite build",
-    "type-check": "vue-tsc --build"
+    "type-check": "vue-tsc --build",
+    "test:api": "node scripts/api-smoke.mjs",
+    "api": "node scripts/api-harness.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
