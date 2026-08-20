@@ -480,7 +480,7 @@ import type { CourseViewModel } from './backend/ViewModel';
 import { decodePlan, encodePlan, isEmptyPlan, plansEqual, type PlanSnapshot } from './backend/PlanCodec';
 import { clearSavedPlan, loadPlan, loadPreferences, savePlan, savePreferences, type Preferences } from './backend/Persistence';
 
-const APP_VERSION = "v0.4, revision 1";
+const APP_VERSION = "v0.3, revision 24";
 const DISCLAIMER = "This is an unofficial tool and isn't affiliated with SHSID. All content derived from the Course Catalog and is for internal reference purposes only. Course availability and policies are subject to change by the school administration. Please schedule a meeting with your homeroom teacher for accurate results!";
 
 interface CourseMeta { id: string; dept: string; grade: string; raw: CourseNode; searchText: string; }
