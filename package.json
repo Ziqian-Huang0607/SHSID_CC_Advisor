@@ -8,7 +8,12 @@
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "build-only": "vite build",
-    "type-check": "vue-tsc --build"
+    "type-check": "vue-tsc --build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:api": "node scripts/api-smoke.mjs",
+    "api": "node scripts/api-harness.mjs",
+    "verify": "npm run type-check && npm run test && npm run build-only"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
@@ -28,6 +33,7 @@
     "typescript": "~6.0.0",
     "vite": "^8.0.7",
     "vite-plugin-vue-devtools": "^8.1.1",
+    "vitest": "^4.1.11",
     "vue": "^3.5.32",
     "vue-tsc": "^3.2.6"
   },
