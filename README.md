@@ -9,8 +9,10 @@ Navigating the SHSID course catalog can be complex, with a web of prerequisites,
 
 We also noticed that students often don't realize which courses are for who. Even though the course catalog offers introductions, sometimes a direct rating and comment from students are what's needed to really tell courses apart. 
 
-- **Backend, designs, UI (by [Will Chen](https://github.com/WillUHD))**: uses a graph theory optimized / topological sorting approach for checking course configuration rules, to make sure selection roadmaps remain accurate. Remote profile fetched [here](https://github.com/WillUHD/CourseResources).
-- **Frontend concepts, prototypes, maintaining (by [Ziqian Huang](https://github.com/Ziqian-Huang0607))**: a modern looking wrapper that renders the state faithfully according to the backend, ensuring the UI is a perfect reflection of the underlying logic.
+- **Backend, designs, UI (by [Will Chen](https://github.com/WillUHD))**: Remote profile fetched [here](https://github.com/WillUHD/CourseResources).
+- **Frontend concepts, prototypes, maintaining, Third Party API Support (by [Ziqian Huang](https://github.com/Ziqian-Huang0607))**
+- **Mobile Support, UI Enhancements (by [Ziheng Yu](https://github.com/Panther114))**
+- **API for StandardCAS and Enhancements (by [Celsia](https://github.com/triadastra))**
 
 ### Use the interactive features
 - Start by selecting any course and build your 4-year roadmap from there! 
