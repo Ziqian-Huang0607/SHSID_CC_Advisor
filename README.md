@@ -112,5 +112,5 @@ description provider contract is in **[docs/input.md](./docs/input.md)**.
 
 ### Support
 - **Maintenance**: Indexademics team
-- **Contact**: `mlfusion@outlook.com` / `willcxd` on WeChat for course catalog issues
+- **Contact**: `mlfusion@outlook.com` for course catalog issues
 - **⚠️ Disclaimer**: This is an unofficial tool that is not affiliated with SHSID. All course information is based on the SHSID Course Catalog and is for reference purposes only. Course availability and policies are subject to change by the school administration.
