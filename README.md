@@ -3,9 +3,13 @@
 An interactive course selection tool for SHSID students, built by SHSID students at the Indexademics and Data Science teams, designed to enable students to build their 4-year plan.
 
 
-<img width="1024" height="1024" alt="idx-icon" src="https://github.com/user-attachments/assets/56fef898-4242-4dc3-972b-946a3c7670d0" />
-<img width="1024" height="1024" alt="cc-icon" src="https://github.com/user-attachments/assets/30d575c7-668d-4840-a71c-db9c66476024" />
-<img width="1024" height="1024" alt="ds-icon" src="https://github.com/user-attachments/assets/f4ce260e-8203-4725-9871-6b787345ee7c" />
+<p align="center">
+  <img width="80" height="80" alt="idx-icon" src="https://github.com/user-attachments/assets/56fef898-4242-4dc3-972b-946a3c7670d0" />
+  &nbsp;&nbsp;
+  <img width="80" height="80" alt="cc-icon" src="https://github.com/user-attachments/assets/30d575c7-668d-4840-a71c-db9c66476024" />
+  &nbsp;&nbsp;
+  <img width="80" height="80" alt="ds-icon" src="https://github.com/user-attachments/assets/f4ce260e-8203-4725-9871-6b787345ee7c" />
+</p>
 
 
 
