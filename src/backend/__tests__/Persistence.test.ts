@@ -41,8 +41,8 @@ describe('Persistence', () => {
     });
 
     it('round-trips preferences', () => {
-        savePreferences({ darkMode: true, leftPanelWidth: 320, rightPanelWidth: 300 });
-        expect(loadPreferences()).toEqual({ darkMode: true, leftPanelWidth: 320, rightPanelWidth: 300 });
+        savePreferences({ darkMode: true, leftPanelWidth: 320, rightPanelWidth: 300, viewMode: 'list' });
+        expect(loadPreferences()).toEqual({ darkMode: true, leftPanelWidth: 320, rightPanelWidth: 300, viewMode: 'list' });
     });
 
     it('clamps a stored panel width back into what the resizer allows', () => {

@@ -20,6 +20,37 @@
       </div>
 
       <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <!-- Map / List segmented control -->
+        <div
+          v-if="!isNarrow"
+          class="hidden sm:flex items-center rounded-full bg-black/5 dark:bg-white/10 p-0.5"
+          role="radiogroup"
+          aria-label="View mode"
+        >
+          <button
+            type="button"
+            role="radio"
+            :aria-checked="viewMode === 'map'"
+            @click="setViewMode('map')"
+            class="h-7 px-2.5 rounded-full text-[12px] font-semibold flex items-center gap-1 transition-all duration-150 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+            :class="viewMode === 'map' ? 'bg-white dark:bg-[#3A3A3C] text-[#007AFF] shadow-sm' : 'text-[#8E8E93] hover:text-black dark:hover:text-white'"
+          >
+            <Symbol name="map" :size="14" />
+            Map
+          </button>
+          <button
+            type="button"
+            role="radio"
+            :aria-checked="viewMode === 'list'"
+            @click="setViewMode('list')"
+            class="h-7 px-2.5 rounded-full text-[12px] font-semibold flex items-center gap-1 transition-all duration-150 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+            :class="viewMode === 'list' ? 'bg-white dark:bg-[#3A3A3C] text-[#007AFF] shadow-sm' : 'text-[#8E8E93] hover:text-black dark:hover:text-white'"
+          >
+            <Symbol name="list" :size="14" />
+            List
+          </button>
+        </div>
+
         <button
           v-if="planCount > 0"
           @click="showPlanPanel ? closeRightPanel() : openPlanPanel()"
@@ -179,25 +210,78 @@
           <button v-if="isNarrow" @click="isSidebarOpen = true" aria-label="Browse departments" class="ml-2 shrink-0 w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 active:bg-black/10 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <button v-if="selectedDept && !isNarrow" @click="handleToggleDept(selectedDept)" aria-label="Back to all departments" class="absolute left-3 w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 z-40 active:bg-black/10 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
-          </button>
 
-          <!-- On a phone the grade columns scroll with the content, so the fixed
-               header shows where you are instead of the column titles. -->
-          <div v-if="isNarrow" class="flex-1 min-w-0 flex items-center gap-2 px-2">
-            <button v-if="selectedDept" @click="handleToggleDept(selectedDept)" aria-label="Back to all departments" class="shrink-0 w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 active:bg-black/10 transition-colors duration-0">
+          <template v-if="showMapView">
+            <div class="flex-1 min-w-0 flex items-center gap-2 px-3">
+              <Symbol name="map" :size="18" class="text-[#007AFF]" />
+              <span class="truncate font-semibold text-[15px] text-black dark:text-white">Course Journey Map</span>
+            </div>
+            <div
+              v-if="isNarrow"
+              class="flex items-center rounded-full bg-black/5 dark:bg-white/10 p-0.5 mr-2"
+              role="radiogroup"
+              aria-label="View mode"
+            >
+              <button
+                type="button"
+                role="radio"
+                :aria-checked="viewMode === 'map'"
+                @click="setViewMode('map')"
+                class="h-7 w-7 inline-flex items-center justify-center rounded-full transition-all duration-150"
+                :class="viewMode === 'map' ? 'bg-white dark:bg-[#3A3A3C] text-[#007AFF] shadow-sm' : 'text-[#8E8E93]'"
+              >
+                <Symbol name="map" :size="14" />
+              </button>
+              <button
+                type="button"
+                role="radio"
+                :aria-checked="viewMode === 'list'"
+                @click="setViewMode('list')"
+                class="h-7 w-7 inline-flex items-center justify-center rounded-full transition-all duration-150"
+                :class="viewMode === 'list' ? 'bg-white dark:bg-[#3A3A3C] text-[#007AFF] shadow-sm' : 'text-[#8E8E93]'"
+              >
+                <Symbol name="list" :size="14" />
+              </button>
+            </div>
+          </template>
+
+          <template v-else>
+            <button v-if="selectedDept && !isNarrow" @click="handleToggleDept(selectedDept)" aria-label="Back to all departments" class="absolute left-3 w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 z-40 active:bg-black/10 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
             </button>
-            <span class="truncate font-semibold text-[14px] text-black dark:text-white">{{ selectedDept || 'All departments' }}</span>
-          </div>
 
-          <div v-else class="grid w-full h-full" :style="gradeGridStyle">
-            <div v-for="grade in grades" :key="grade" class="flex items-center justify-center font-medium text-[13px] text-[#8E8E93] dark:text-[#98989D]">Grade {{ grade }}</div>
-          </div>
+            <!-- On a phone the grade columns scroll with the content, so the fixed
+                 header shows where you are instead of the column titles. -->
+            <div v-if="isNarrow" class="flex-1 min-w-0 flex items-center gap-2 px-2">
+              <button v-if="selectedDept" @click="handleToggleDept(selectedDept)" aria-label="Back to all departments" class="shrink-0 w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-500 active:bg-black/10 transition-colors duration-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
+              </button>
+              <span class="truncate font-semibold text-[14px] text-black dark:text-white">{{ selectedDept || 'All departments' }}</span>
+            </div>
+
+            <div v-else class="grid w-full h-full" :style="gradeGridStyle">
+              <div v-for="grade in grades" :key="grade" class="flex items-center justify-center font-medium text-[13px] text-[#8E8E93] dark:text-[#98989D]">Grade {{ grade }}</div>
+            </div>
+          </template>
         </div>
 
-        <div class="flex-1 overflow-y-auto relative" :class="isNarrow ? 'overflow-x-auto' : 'overflow-x-clip'" ref="rightScrollRef" @click="handleContentAreaClick">
+        <div class="flex-1 relative" :class="[isNarrow ? 'overflow-x-auto' : 'overflow-x-clip', showMapView ? 'overflow-hidden' : 'overflow-y-auto']" ref="rightScrollRef" @click="handleContentAreaClick">
+          <!-- Map view -->
+          <PathwayMap
+            v-if="showMapView && catalogData"
+            class="absolute inset-0 z-10"
+            :catalog="catalogData"
+            :view-state="viewState"
+            :inspected-course-id="viewingCourseId"
+            :selected-dept="selectedDept"
+            :is-dark="isDarkMode"
+            :rating-of="ratingOf"
+            @toggle="handleMapCourseToggle"
+            @inspect="openCourseInfo"
+            @browse-departments="handleBrowseDepartments"
+            @click.stop
+          />
+
           <!-- Grade titles ride along with the horizontally scrolling grid on phones. -->
           <div v-if="isNarrow" class="sticky top-0 z-20 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-xl border-b border-black/5 dark:border-white/5" :style="gridWrapperStyle">
             <div class="grid h-9" :style="[gradeGridStyle, selectedDept ? { marginLeft: '24px', marginRight: '24px' } : { marginLeft: '8px', marginRight: '8px' }]">
@@ -398,6 +482,16 @@
             </div>
 
             <div v-if="planCount > 0" class="mt-5 pt-4 border-t border-black/5 dark:border-white/10 flex flex-col gap-2">
+              <div class="grid grid-cols-2 gap-2">
+                <button @click="promptSaveScenario" class="py-2 rounded-[9px] bg-black/5 dark:bg-white/10 text-black dark:text-white text-[11px] font-bold hover:bg-black/10 dark:hover:bg-white/20 active:bg-black/15 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF] flex items-center justify-center gap-1">
+                  <Symbol name="square-stack" :size="13" />
+                  Save scenario
+                </button>
+                <button @click="openScenarioCompare" class="py-2 rounded-[9px] bg-black/5 dark:bg-white/10 text-black dark:text-white text-[11px] font-bold hover:bg-black/10 dark:hover:bg-white/20 active:bg-black/15 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF] flex items-center justify-center gap-1">
+                  <Symbol name="arrow-left-right" :size="13" />
+                  Compare
+                </button>
+              </div>
               <button @click="copyShareLink" class="w-full py-2 rounded-[9px] bg-[#007AFF] text-white text-[11px] font-bold hover:bg-[#0070EB] active:bg-[#0062D1] shadow-sm transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF] focus-visible:ring-offset-2">Copy share link</button>
               <button @click="clearPlan" class="w-full py-2 rounded-[9px] bg-[#FF3B30]/10 text-[#FF3B30] text-[11px] font-bold hover:bg-[#FF3B30]/20 active:bg-[#FF3B30]/30 transition-colors duration-0 outline-none focus-visible:ring-2 focus-visible:ring-[#FF3B30]">Clear plan</button>
               <p class="text-[9px] leading-relaxed text-[#8E8E93] text-center mt-1">Your plan is saved on this device automatically.</p>
@@ -417,6 +511,73 @@
         </Transition>
       </div>
     </div>
+
+    <!-- Save scenario prompt -->
+    <Teleport to="body">
+      <Transition name="sheet-backdrop">
+        <div
+          v-if="showSaveScenarioPrompt"
+          class="fixed inset-0 z-[260] flex items-center justify-center"
+          @click.self="cancelSaveScenario"
+        >
+          <div class="absolute inset-0 bg-black/30 dark:bg-black/50 backdrop-blur-sm" />
+          <div class="relative z-10 w-[320px] max-w-[90vw] bg-white dark:bg-[#1C1C1E] rounded-[20px] p-5 shadow-2xl border border-black/5 dark:border-white/10">
+            <h3 class="text-[17px] font-bold text-black dark:text-white mb-1">Save scenario</h3>
+            <p class="text-[12px] text-[#8E8E93] mb-4">Give this plan a name so you can compare it later.</p>
+            <input
+              ref="scenarioNameInputRef"
+              v-model="scenarioNameInput"
+              type="text"
+              class="w-full h-10 px-3 rounded-xl bg-black/5 dark:bg-white/10 text-[14px] text-black dark:text-white border-none outline-none focus:ring-2 focus:ring-[#007AFF] mb-4"
+              placeholder="e.g. Pre-med track"
+              @keydown.enter="confirmSaveScenario"
+              @keydown.esc="cancelSaveScenario"
+            />
+            <div class="flex justify-end gap-2">
+              <button @click="cancelSaveScenario" class="h-9 px-4 rounded-full bg-black/5 dark:bg-white/10 text-[13px] font-semibold text-black dark:text-white hover:bg-black/10 dark:hover:bg-white/20 active:bg-black/15 transition-colors">Cancel</button>
+              <button @click="confirmSaveScenario" class="h-9 px-4 rounded-full bg-[#007AFF] text-white text-[13px] font-semibold hover:bg-[#0070EB] active:bg-[#0062D1] transition-colors">Save</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Scenario compare -->
+    <ScenarioCompare
+      :is-open="showScenarioCompare"
+      :scenarios="scenarios"
+      :current-snapshot="currentSnapshot()"
+      :catalog="catalogData!"
+      @close="showScenarioCompare = false"
+    />
+
+    <!-- Mobile course detail bottom sheet -->
+    <CourseBottomSheet
+      v-if="isNarrow && viewingCourseId"
+      :is-open="isNarrow && !!viewingCourseId"
+      :name="activeVm?.name || activeRaw?.raw.name || ''"
+      :dept="activeRaw?.dept || ''"
+      :grade="String(activeVm?.grade || activeRaw?.grade || '')"
+      :track="activeRaw?.raw.track"
+      :description="activeRaw?.raw.description || ''"
+      :crowd-review="activeRaw?.raw.crowdReview"
+      :rating-value="activeRating.value"
+      :vote-count="activeRating.voteCount"
+      :my-vote="activeRating.myVote"
+      :is-editing-vote="isEditingVote"
+      :is-submitting-vote="isSubmittingVote"
+      :vote-error="voteError"
+      :is-move-up-target="!!activeVm?.isMoveUpTarget"
+      :is-move-up-source="!!activeVm?.isMoveUpSource"
+      :is-locked-move-up-source="!!activeVm?.isLockedMoveUpSource"
+      :move-up-source-name="getCourseName(activeVm?.moveUpSourceId)"
+      :move-up-target-name="getCourseName(activeVm?.moveUpTargetId)"
+      @close="closeRightPanel"
+      @vote="value => submitVote(viewingCourseId!, value)"
+      @start-editing-vote="startEditingVote"
+      @cancel-editing-vote="cancelEditingVote"
+      @remove-move-up="removeMoveUp(viewingCourseId!)"
+    />
 
     <!-- INVISIBLE EXPORT TARGET -->
     <div class="fixed top-0 left-[300vw] w-[1200px] pointer-events-none z-[-10]">
@@ -490,7 +651,13 @@ import type { EffectiveRating } from './backend/RatingStore';
 import type { CourseModel, CourseNode } from './backend/CourseModel';
 import type { CourseViewModel } from './backend/ViewModel';
 import { decodePlan, encodePlan, isEmptyPlan, plansEqual, type PlanSnapshot } from './backend/PlanCodec';
-import { clearSavedPlan, loadPlan, loadPreferences, savePlan, savePreferences, type Preferences } from './backend/Persistence';
+import { clearSavedPlan, loadPlan, loadPreferences, savePlan, savePreferences, type Preferences, type ViewMode } from './backend/Persistence';
+import PathwayMap from './components/PathwayMap.vue';
+import Symbol from './components/Symbol.vue';
+import ScenarioCompare from './components/ScenarioCompare.vue';
+import CourseBottomSheet from './components/CourseBottomSheet.vue';
+import { haptic } from './utils/haptics';
+import { listScenarioSummaries, saveScenario, type ScenarioListItem } from './backend/ScenarioStore';
 
 const APP_VERSION = "v0.3, revision 24";
 const APP_UPDATED = "Aug 20, 2026";
@@ -514,13 +681,17 @@ const controller = ref<CourseSelectionController | null>(null);
 const viewingCourseId = ref<string | null>(null);
 const showAboutPanel = ref<boolean>(false);
 const showPlanPanel = ref<boolean>(false);
-const isRightPanelOpen = computed(() => !!viewingCourseId.value || showAboutPanel.value || showPlanPanel.value);
+const isRightPanelOpen = computed(() =>
+  (!isNarrow.value && !!viewingCourseId.value) || showAboutPanel.value || showPlanPanel.value
+);
 const isLoading = ref<boolean>(true);
 // Set when the catalog came from the local cache rather than the network, so the
 // student is told the data may be behind instead of quietly trusting it.
 const catalogNotice = ref<string | null>(null);
 
 const isDarkMode = ref<boolean>(false);
+const preferences = loadPreferences();
+const viewMode = ref<ViewMode>(preferences.viewMode);
 const searchQuery = ref<string>('');
 const selectedDept = ref<string | null>(null);
 const pressingDept = ref<string | null>(null);
@@ -582,7 +753,13 @@ const mouseX = ref(0);
 const mouseY = ref(0);
 const moveUpState = ref<{ active: boolean; sourceId: string | null; targetIds: string[]; }>({ active: false, sourceId: null, targetIds: [] });
 
-const preferences = loadPreferences();
+// --- Scenario compare (local-only) ---
+const scenarios = ref<ScenarioListItem[]>([]);
+const showScenarioCompare = ref(false);
+const showSaveScenarioPrompt = ref(false);
+const scenarioNameInput = ref('');
+const scenarioNameInputRef = ref<HTMLInputElement | null>(null);
+
 const leftPanelWidth = ref(preferences.leftPanelWidth);
 const rightPanelWidth = ref(preferences.rightPanelWidth);
 const isResizingLeft = ref(false);
@@ -592,9 +769,16 @@ const persistPreferences = () => {
   const next: Preferences = {
     darkMode: isDarkMode.value,
     leftPanelWidth: leftPanelWidth.value,
-    rightPanelWidth: rightPanelWidth.value
+    rightPanelWidth: rightPanelWidth.value,
+    viewMode: viewMode.value
   };
   savePreferences(next);
+};
+
+const setViewMode = (mode: ViewMode) => {
+  viewMode.value = mode;
+  persistPreferences();
+  scheduleArrowRefresh();
 };
 
 const startLeftResize = (event: MouseEvent) => { isResizingLeft.value = true; window.addEventListener('mousemove', doLeftResize); window.addEventListener('mouseup', stopLeftResize); event.preventDefault(); };
@@ -768,6 +952,7 @@ const activeDepartments = computed(() => {
   return Array.from(matchedDepts);
 });
 const visibleDepts = computed(() => selectedDept.value ? [selectedDept.value] : activeDepartments.value);
+const showMapView = computed(() => viewMode.value === 'map');
 const collapsedDepts = computed(() => { if (selectedDept.value === null) return new Set(activeDepartments.value); const s = new Set(activeDepartments.value); s.delete(selectedDept.value); return s; });
 const activeVm = computed(() => viewingCourseId.value ? viewState.value[viewingCourseId.value] : null);
 const activeRaw = computed(() => viewingCourseId.value ? courseMetaById.value.get(viewingCourseId.value) || null : null);
@@ -1021,8 +1206,30 @@ const cancelMoveUpMode = () => {
   hideTooltip();
 };
 
-const executeMoveUp = (targetId: string) => { if (moveUpState.value.sourceId) { const sourceId = moveUpState.value.sourceId; withHistory(() => controller.value?.setExplicitMoveUp(sourceId, targetId)); cancelMoveUpMode(); hideTooltip(); } };
-const removeMoveUp = (sourceId: string) => { withHistory(() => controller.value?.removeExplicitMoveUp(sourceId)); };
+const executeMoveUp = (targetId: string) => {
+  if (moveUpState.value.sourceId) {
+    const sourceId = moveUpState.value.sourceId;
+    withHistory(() => controller.value?.setExplicitMoveUp(sourceId, targetId));
+    haptic('success');
+    cancelMoveUpMode();
+    hideTooltip();
+  }
+};
+const removeMoveUp = (sourceId: string) => {
+  withHistory(() => controller.value?.removeExplicitMoveUp(sourceId));
+  haptic('light');
+};
+
+const handleMapCourseToggle = (courseId: string) => {
+  haptic('light');
+  handleCourseClick(courseId);
+};
+
+const handleBrowseDepartments = () => {
+  if (isNarrow.value) {
+    isSidebarOpen.value = true;
+  }
+};
 
 const handleCourseClick = (courseId: string) => {
   if (moveUpState.value.active) {
@@ -1502,6 +1709,40 @@ const removeFromPlan = (courseId: string) => {
 const openPlanPanel = () => { viewingCourseId.value = null; showAboutPanel.value = false; showPlanPanel.value = true; };
 const closeRightPanel = () => { viewingCourseId.value = null; showAboutPanel.value = false; showPlanPanel.value = false; };
 
+const refreshScenarios = () => {
+  scenarios.value = listScenarioSummaries();
+};
+
+const openScenarioCompare = () => {
+  refreshScenarios();
+  showScenarioCompare.value = true;
+};
+
+const promptSaveScenario = () => {
+  scenarioNameInput.value = `Plan ${scenarios.value.length + 1}`;
+  showSaveScenarioPrompt.value = true;
+  nextTick(() => scenarioNameInputRef.value?.focus());
+};
+
+const confirmSaveScenario = () => {
+  const snapshot = currentSnapshot();
+  if (!snapshot || isEmptyPlan(snapshot)) {
+    announce('Select some courses first before saving a scenario.');
+    showSaveScenarioPrompt.value = false;
+    return;
+  }
+  saveScenario(scenarioNameInput.value, snapshot);
+  refreshScenarios();
+  showSaveScenarioPrompt.value = false;
+  haptic('success');
+  announce('Scenario saved.');
+};
+
+const cancelSaveScenario = () => {
+  showSaveScenarioPrompt.value = false;
+  scenarioNameInput.value = '';
+};
+
 const revealCourse = (courseId: string) => {
   const meta = courseMetaById.value.get(courseId);
   if (!meta) return;
@@ -1605,10 +1846,12 @@ const loadCatalog = async () => {
 
 onMounted(async () => {
   inject();
+  refreshScenarios();
   // A saved choice wins; otherwise follow the operating system.
   const prefersDark = preferences.darkMode ?? window.matchMedia('(prefers-color-scheme: dark)').matches;
   isDarkMode.value = prefersDark;
   document.documentElement.classList.toggle('dark', prefersDark);
+  // List view is the default; the map is reachable from the header toggle.
   window.addEventListener('keydown', handleKeydown); window.addEventListener('click', closeDropdown); window.addEventListener('resize', scheduleArrowRefresh);
   narrowQuery = window.matchMedia(NARROW_QUERY);
   onNarrowChange(narrowQuery);
@@ -1640,6 +1883,8 @@ onBeforeUnmount(() => {
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .panel-content-fade-enter-active, .panel-content-fade-leave-active { transition: opacity 0.15s ease-out; }
 .panel-content-fade-enter-from, .panel-content-fade-leave-to { opacity: 0; }
+.sheet-backdrop-enter-active, .sheet-backdrop-leave-active { transition: opacity 0.25s ease; }
+.sheet-backdrop-enter-from, .sheet-backdrop-leave-to { opacity: 0; }
 </style>
 <style>
 .theme-transition, .theme-transition * {

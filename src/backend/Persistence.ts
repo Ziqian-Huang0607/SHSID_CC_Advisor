@@ -10,17 +10,22 @@ import { decodePlan, encodePlan, normalizePlan, type PlanSnapshot } from './Plan
 const PLAN_KEY = 'shsid-cc.plan.v1';
 const PREFS_KEY = 'shsid-cc.prefs.v1';
 
+export type ViewMode = 'map' | 'list';
+
 export interface Preferences {
     /** null = follow the operating system. */
     darkMode: boolean | null;
     leftPanelWidth: number;
     rightPanelWidth: number;
+    /** Preferred main view mode. Desktop defaults to map; narrow screens ignore this. */
+    viewMode: ViewMode;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
     darkMode: null,
     leftPanelWidth: 280,
-    rightPanelWidth: 280
+    rightPanelWidth: 280,
+    viewMode: 'list'
 };
 
 function readRaw(key: string): string | null {
@@ -79,7 +84,8 @@ export function loadPreferences(): Preferences {
         return {
             darkMode: typeof parsed.darkMode === 'boolean' ? parsed.darkMode : null,
             leftPanelWidth: clampWidth(parsed.leftPanelWidth, DEFAULT_PREFERENCES.leftPanelWidth, 180, 400),
-            rightPanelWidth: clampWidth(parsed.rightPanelWidth, DEFAULT_PREFERENCES.rightPanelWidth, 220, 450)
+            rightPanelWidth: clampWidth(parsed.rightPanelWidth, DEFAULT_PREFERENCES.rightPanelWidth, 220, 450),
+            viewMode: parsed.viewMode === 'list' ? 'list' : DEFAULT_PREFERENCES.viewMode
         };
     } catch {
         return { ...DEFAULT_PREFERENCES };
